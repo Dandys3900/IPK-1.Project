@@ -8,7 +8,7 @@ class UDPClass {
         // Transport data
         uint16_t msg_id;
         uint16_t port;
-        std::string ip_addr;
+        std::string server_hostname;
         int socket_id;
 
         // Behaviour
@@ -44,7 +44,7 @@ class UDPClass {
         ~UDPClass ();
 
         void start_listening ();
-        void start_sending ();
+        //void start_sending ();
 
         void send_auth (DataStruct cmd_data);
         void send_msg (std::string msg);

@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <errno.h>
+#include <netdb.h>
 #include <algorithm>
 #include <map>
 #include <csignal>

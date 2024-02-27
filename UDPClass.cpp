@@ -3,7 +3,7 @@
 UDPClass::UDPClass (std::map<std::string, std::string> data_map)
     : msg_id          (0),
       port            (4567),
-      ip_addr         (),
+      server_hostname (),
       socket_id       (-1),
       recon_attempts  (3),
       timeout         (250),
@@ -14,7 +14,7 @@ UDPClass::UDPClass (std::map<std::string, std::string> data_map)
     std::map<std::string, std::string>::iterator iter;
     // Look for init values in map to override init values
     if ((iter = data_map.find("ipaddr")) != data_map.end())
-        this->ip_addr = iter->second;
+        this->server_hostname = iter->second;
 
     if ((iter = data_map.find("port")) != data_map.end())
         this->port = uint16_t{std::stoi(iter->second)};
@@ -33,12 +33,16 @@ UDPClass::~UDPClass ()
 /***********************************************************************************/
 void UDPClass::start_listening () {
     // Create UDP socket
-    if ((this->socket_id = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+    if ((this->socket_id = socket(AF_INET, SOCK_DGRAM, 0)) <= 0) {
         OutputClass::out_err_intern("UDP socket creation failed");
-        session_end();
-        return;
+        exit(EXIT_FAILURE);
     }
 
+    struct hostent* server = gethostbyname(this->server_hostname.c_str());
+    if (!server) {
+        OutputClass::out_err_intern("Unknown or invalid hostname provided");
+        exit(EXIT_FAILURE);
+    }
     // Setup server details
     struct sockaddr_in server_addr;
     // Make sure everything is reset
@@ -48,15 +52,15 @@ void UDPClass::start_listening () {
     // Set port number
     server_addr.sin_port = htons(this->port);
     // Set server address
-    server_addr.sin_addr.s_addr = inet_addr(this->ip_addr.c_str());
+    memcpy(&server_addr.sin_addr.s_addr, server->h_addr, server->h_length);
     // Store to class
     this->sock_str = server_addr;
 }
-
+/*
 void UDPClass::start_sending () {
     // Bind socket it with server address for receiving messages
     bind(this->socket_id, (struct sockaddr*)&(this->sock_str), sizeof(this->sock_str));
-}
+}*/
 /***********************************************************************************/
 void UDPClass::session_end () {
     // Change state
@@ -188,7 +192,7 @@ void UDPClass::send (uint8_t type, DataStruct send_data) {
         sendto(socket_id, out_buffer, message.length(), 0, (struct sockaddr*)&(this->sock_str), sizeof(this->sock_str));
 
     // Check for errors
-    if (bytes_send <= 0) {
+    if (bytes_send < 0) {
         OutputClass::out_err_intern("Error while sending data to server");
         session_end();
         return;

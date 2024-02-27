@@ -50,6 +50,7 @@ int main (int argc, char *argv[]) {
     }
 
     udpclient = new UDPClass(data_map);
+    udpclient->start_listening();
 
     // Process user input
     std::string user_line;
