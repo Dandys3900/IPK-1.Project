@@ -5,11 +5,6 @@
 AbstractClass* client;
 
 int main (int argc, char *argv[]) {
-    // Not enough args given
-    /*if (argc < 5) {
-        OutputClass::out_err_intern("Unsufficient number of arguments provided");
-        return EXIT_FAILURE;
-    }*/
     // Store client type given by user
     char* client_type = "";
 
@@ -65,7 +60,10 @@ int main (int argc, char *argv[]) {
     std::vector<std::string> line_vec;
 
     // Set interrput signal handling
-    std::signal(SIGINT, [](int sig_val){client->send_bye();});
+    std::signal(SIGINT, [](int sig_val){
+        client->send_bye();
+        exit(EXIT_SUCCESS);
+    });
 
     while (true) {
         // End connection in case of EOF

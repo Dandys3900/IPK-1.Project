@@ -59,7 +59,7 @@ void UDPClass::session_end () {
     cur_state = S_END;
     // Send bye message
     handle_send(BYE, (UDP_DataStruct){.type = BYE,
-                                  .msg_id = (this->msg_id)++});
+                                      .msg_id = (this->msg_id)++});
     // Close socket
     close(this->socket_id);
 }
