@@ -5,18 +5,6 @@
 // Global variable for storing UDPClass
 UDPClass* udpclient = nullptr;
 
-void get_line_words (std::string line, std::vector<std::string>& words_vec) {
-    // Clear vector
-    words_vec.clear();
-
-    // Create string stream from input line
-    std::stringstream ss(line);
-    std::string line_word;
-
-    while (ss >> line_word)
-        words_vec.push_back(line_word);
-}
-
 int main (int argc, char *argv[]) {
     // Not enough args given
     if (argc < 5) {
@@ -50,7 +38,7 @@ int main (int argc, char *argv[]) {
     }
 
     udpclient = new UDPClass(data_map);
-    udpclient->start_listening();
+    udpclient->open_connection();
 
     // Process user input
     std::string user_line;
@@ -71,7 +59,7 @@ int main (int argc, char *argv[]) {
             // Command - load words from user input line
             get_line_words(user_line, line_vec);
             if (line_vec.at(0) == std::string("/auth") && line_vec.size() == 4) {
-                udpclient->send_auth((DataStruct){ .user_name = line_vec.at(1),
+                udpclient->send_auth((UDP_DataStruct){ .user_name = line_vec.at(1),
                                                    .display_name = line_vec.at(3),
                                                    .secret = line_vec.at(2),});
             }

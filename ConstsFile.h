@@ -49,16 +49,16 @@ enum FSM_STATE {
     S_END
 };
 
-typedef struct {
-    uint8_t type             = NO_TYPE; // 1 byte
-    uint16_t msg_id          = 0;       // 2 bytes
-    uint16_t ref_msg_id      = 0;       // 2 bytes
-    bool result              = false;   // 1 byte
-    std::string message      = "";      // N bytes
-    std::string user_name    = "";      // N bytes
-    std::string display_name = "";      // N bytes
-    std::string secret       = "";      // N bytes
-    std::string channel_id   = "";      // N bytes
-} DataStruct;
+void get_line_words (std::string line, std::vector<std::string>& words_vec) {
+    // Clear vector
+    words_vec.clear();
+
+    // Create string stream from input line
+    std::stringstream ss(line);
+    std::string line_word;
+
+    while (ss >> line_word)
+        words_vec.push_back(line_word);
+}
 
 #endif // CONSTSFILE_H
