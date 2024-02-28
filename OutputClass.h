@@ -24,7 +24,7 @@ class OutputClass {
         }
 
         static void out_help () {
-            cout << std::string("Help text: \n Use -t to set type [tcp/udp], -s for providing IPv4 address, -p for specifying port, -d for UDP timeout and -r for UDP retransmissions count \n").c_str();
+            cout << std::string("Help text: \n Use -t to set type [tcp/udp],\n -s for providing IPv4 address,\n -p for specifying port,\n -d for UDP timeout\n -r for UDP retransmissions count \n").c_str();
         }
 };
 

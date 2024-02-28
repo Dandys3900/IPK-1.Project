@@ -1,7 +1,7 @@
 #ifndef TCPCLASS_H
 #define TCPCLASS_H
 
-#include "ConstsFile.h"
+#include "AbstractClass.h"
 
 typedef struct {
     bool result              = false;   // 1 byte
@@ -12,7 +12,7 @@ typedef struct {
     std::string channel_id   = "";      // N bytes
 } TCP_DataStruct;
 
-class TCPClass {
+class TCPClass : public AbstractClass {
     private:
         // Transport data
         std::string msg_id;
@@ -42,13 +42,13 @@ class TCPClass {
         TCPClass (std::map<std::string, std::string> data_map);
         ~TCPClass ();
 
-        void open_connection ();
+        void open_connection () override;
 
-        void send_auth (TCP_DataStruct cmd_data);
-        void send_msg (std::string msg);
-        void send_join (std::string channel_id);
-        void send_rename (std::string new_display_name);
-        void send_bye ();
+        void send_auth (std::string user_name, std::string display_name, std::string secret) override;
+        void send_msg (std::string msg) override;
+        void send_join (std::string channel_id) override;
+        void send_rename (std::string new_display_name) override;
+        void send_bye () override;
 };
 
 #endif // TCPCLASS_H

@@ -33,16 +33,13 @@ UDPClass::~UDPClass ()
 /***********************************************************************************/
 void UDPClass::open_connection () {
     // Create UDP socket
-    if ((this->socket_id = socket(AF_INET, SOCK_DGRAM, 0)) <= 0) {
-        OutputClass::out_err_intern("UDP socket creation failed");
-        exit(EXIT_FAILURE);
-    }
+    if ((this->socket_id = socket(AF_INET, SOCK_DGRAM, 0)) <= 0)
+        throw ("UDP socket creation failed");
 
     struct hostent* server = gethostbyname(this->server_hostname.c_str());
-    if (!server) {
-        OutputClass::out_err_intern("Unknown or invalid hostname provided");
-        exit(EXIT_FAILURE);
-    }
+    if (!server)
+        throw ("Unknown or invalid hostname provided");
+
     // Setup server details
     struct sockaddr_in server_addr;
     // Make sure everything is reset
@@ -67,25 +64,28 @@ void UDPClass::session_end () {
     close(this->socket_id);
 }
 /***********************************************************************************/
-void UDPClass::send_auth (UDP_DataStruct cmd_data) {
+void UDPClass::send_auth (std::string user_name, std::string display_name, std::string secret) {
     if (cur_state != S_START)
         throw ("Can't send message outside of open state");
 
     // Check for allowed sizes of params
-    if (cmd_data.user_name.length() > USERNAME_MAX_LENGTH ||
-        cmd_data.display_name.length() > DISPLAY_NAME_MAX_LENGTH ||
-        cmd_data.secret.length() > SECRET_MAX_LENGTH)
+    if (user_name.length() > USERNAME_MAX_LENGTH ||
+        display_name.length() > DISPLAY_NAME_MAX_LENGTH ||
+        secret.length() > SECRET_MAX_LENGTH)
     {
-        OutputClass::out_err_intern("Prohibited length of param/s");
-        return;
+        throw ("Prohibited length of param/s");
     }
 
-    // Update displayname
-    this->display_name = cmd_data.display_name;
+    // Update display name
+    this->display_name = display_name;
 
-    // Each message being send must have msg_id and its type set in advance
-    cmd_data.type = AUTH;
-    cmd_data.msg_id = (this->msg_id)++;
+    UDP_DataStruct cmd_data = {
+        .type = AUTH,
+        .msg_id = (this->msg_id)++,
+        .user_name = user_name,
+        .display_name = display_name,
+        .secret = secret
+    };
 
     // Save auth data in case of resend
     this->auth_data = cmd_data;
@@ -99,10 +99,8 @@ void UDPClass::send_msg (std::string msg) {
         throw ("Can't send message outside of open state");
 
     // Check for allowed sizes of params
-    if (msg.length() > MESSAGE_MAX_LENGTH) {
-        OutputClass::out_err_intern("Prohibited length of param/s");
-        return;
-    }
+    if (msg.length() > MESSAGE_MAX_LENGTH)
+        throw ("Prohibited length of param/s");
 
     handle_send(MSG, (UDP_DataStruct){.type = MSG,
                                   .msg_id = (this->msg_id)++,
@@ -115,10 +113,8 @@ void UDPClass::send_join (std::string channel_id) {
         throw ("Can't process join outside of open state");
 
     // Check for allowed sizes of params
-    if (channel_id.length() > CHANNEL_ID_MAX_LENGTH) {
-        OutputClass::out_err_intern("Prohibited length of param/s");
-        return;
-    }
+    if (channel_id.length() > CHANNEL_ID_MAX_LENGTH)
+        throw ("Prohibited length of param/s");
 
     handle_send(JOIN, (UDP_DataStruct){.type = JOIN,
                                    .msg_id = (this->msg_id)++,
@@ -128,7 +124,7 @@ void UDPClass::send_join (std::string channel_id) {
 
 void UDPClass::send_rename (std::string new_display_name) {
     if (new_display_name.length() > DISPLAY_NAME_MAX_LENGTH)
-        OutputClass::out_err_intern("Prohibited length of param/s");
+        throw ("Prohibited length of param/s");
     else
         this->display_name = new_display_name;
 }
@@ -156,8 +152,8 @@ void UDPClass::handle_send (uint8_t msg_type, UDP_DataStruct send_data) {
             }
             break;
         }
-        catch (std::string err_msg) {
-            OutputClass::out_err_intern(err_msg);
+        catch (const char* err_msg) {
+            OutputClass::out_err_intern(std::string(err_msg));
             // Repeat, if possible
             continue;
         }
@@ -170,11 +166,8 @@ void UDPClass::set_socket_timeout (uint16_t timeout /*miliseconds*/) {
         .tv_usec = suseconds_t(timeout * 1000)
     };
 
-    if (setsockopt(this->socket_id, SOL_SOCKET, SO_RCVTIMEO,
-        (char*)&(time), sizeof(struct timeval)) < 0)
-    {
-        OutputClass::out_err_intern("Setting receive timeout failed");
-    }
+    if (setsockopt(this->socket_id, SOL_SOCKET, SO_RCVTIMEO, (char*)&(time), sizeof(struct timeval)) < 0)
+        throw ("Setting receive timeout failed");
 }
 /***********************************************************************************/
 void UDPClass::sendData (uint8_t type, UDP_DataStruct send_data) {
@@ -187,10 +180,9 @@ void UDPClass::sendData (uint8_t type, UDP_DataStruct send_data) {
         sendto(this->socket_id, out_buffer, strlen(out_buffer), 0, (struct sockaddr*)&(this->sock_str), sizeof(this->sock_str));
 
     // Check for errors
-    if (bytes_send < 0) {
-        OutputClass::out_err_intern("Error while sending data to server");
+    if (bytes_send <= 0) {
         session_end();
-        return;
+        throw ("Error while sending data to server");
     }
 
     // We expect confirm message, set socket timeout for that (miliseconds)
@@ -232,9 +224,8 @@ void UDPClass::receive () {
 
         // Check for errors
         if (bytes_received <= 0) {
-            OutputClass::out_err_intern("Error while receiving data from server");
             session_end();
-            return;
+            throw ("Error while receiving data from server");
         }
 
         in_buffer[bytes_received] = '\0';
@@ -246,6 +237,7 @@ void UDPClass::receive () {
 
         // Check vector of already processed message IDs
         if ((std::find(processed_msgs.begin(), processed_msgs.end(), msg_id)) == processed_msgs.end()) {
+            // Store and mark as proceeded msg ID
             processed_msgs.push_back(msg_id);
             UDP_DataStruct data = deserialize_msg(msg_type, msg_id, response);
             proces_response(msg_type, data);
@@ -319,7 +311,7 @@ void UDPClass::proces_response (uint8_t resp, UDP_DataStruct& resp_data) {
             break;
         default:
             // Not expected state, output error
-            OutputClass::out_err_intern("Unknown current state");
+            throw ("Unknown current state");
             break;
     }
 }
@@ -370,7 +362,7 @@ UDP_DataStruct UDPClass::deserialize_msg (uint8_t msg_type, uint16_t msg_id, std
             out.message = msg.substr(pos_in_msg);
             break;
         default:
-            OutputClass::out_err_intern("Unknown message type provided");
+            throw ("Unknown message type provided");
             break;
     }
     // Return deserialized message
@@ -400,7 +392,7 @@ std::string UDPClass::convert_to_string (uint8_t type, UDP_DataStruct& data) {
             msg = std::to_string(data.type) + std::to_string(data.msg_id);
             break;
         default:
-            OutputClass::out_err_intern("Unknown message type provided");
+            throw ("Unknown message type provided");
             break;
     }
     // Return composed message

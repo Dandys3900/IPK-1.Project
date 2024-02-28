@@ -49,16 +49,4 @@ enum FSM_STATE {
     S_END
 };
 
-void get_line_words (std::string line, std::vector<std::string>& words_vec) {
-    // Clear vector
-    words_vec.clear();
-
-    // Create string stream from input line
-    std::stringstream ss(line);
-    std::string line_word;
-
-    while (ss >> line_word)
-        words_vec.push_back(line_word);
-}
-
 #endif // CONSTSFILE_H

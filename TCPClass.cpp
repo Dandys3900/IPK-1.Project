@@ -24,16 +24,13 @@ TCPClass::~TCPClass ()
 /***********************************************************************************/
 void TCPClass::open_connection () {
     // Create TCP socket
-    if ((this->socket_id = socket(AF_INET, SOCK_STREAM, 0)) <= 0) {
-        OutputClass::out_err_intern("TCP socket creation failed");
-        exit(EXIT_FAILURE);
-    }
+    if ((this->socket_id = socket(AF_INET, SOCK_STREAM, 0)) <= 0)
+        throw ("TCP socket creation failed");
 
     struct hostent* server = gethostbyname(this->server_hostname.c_str());
-    if (!server) {
-        OutputClass::out_err_intern("Unknown or invalid hostname provided");
-        exit(EXIT_FAILURE);
-    }
+    if (!server)
+        throw ("Unknown or invalid hostname provided");
+
     // Setup server details
     struct sockaddr_in server_addr;
     // Make sure everything is reset
@@ -47,8 +44,8 @@ void TCPClass::open_connection () {
 
     // Connect to server
     if (connect(this->socket_id, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0) {
-        OutputClass::out_err_intern("Error connecting to TCP server");
         session_end();
+        throw ("Error connecting to TCP server");
     }
 }
 /***********************************************************************************/
@@ -63,25 +60,26 @@ void TCPClass::session_end () {
     close(this->socket_id);
 }
 /***********************************************************************************/
-void TCPClass::send_auth (TCP_DataStruct cmd_data) {
+void TCPClass::send_auth (std::string user_name, std::string display_name, std::string secret) {
     if (cur_state != S_START)
         throw ("Can't sendData message outside of open state");
 
     // Check for allowed sizes of params
-    if (cmd_data.user_name.length() > USERNAME_MAX_LENGTH ||
-        cmd_data.display_name.length() > DISPLAY_NAME_MAX_LENGTH ||
-        cmd_data.secret.length() > SECRET_MAX_LENGTH)
+    if (user_name.length() > USERNAME_MAX_LENGTH ||
+        display_name.length() > DISPLAY_NAME_MAX_LENGTH ||
+        secret.length() > SECRET_MAX_LENGTH)
     {
-        OutputClass::out_err_intern("Prohibited length of param/s");
-        return;
+        throw ("Prohibited length of param/s");
     }
 
     // Update displayname
-    this->display_name = cmd_data.display_name;
+    this->display_name = display_name;
 
     // Move to auth state
     cur_state = S_AUTH;
-    sendData(AUTH, cmd_data);
+    sendData(AUTH, (TCP_DataStruct){.user_name = user_name,
+                                    .display_name = display_name,
+                                    .secret = secret});
 }
 
 void TCPClass::send_msg (std::string msg) {
@@ -89,10 +87,8 @@ void TCPClass::send_msg (std::string msg) {
         throw ("Can't sendData message outside of open state");
 
     // Check for allowed sizes of params
-    if (msg.length() > MESSAGE_MAX_LENGTH) {
-        OutputClass::out_err_intern("Prohibited length of param/s");
-        return;
-    }
+    if (msg.length() > MESSAGE_MAX_LENGTH)
+        throw  ("Prohibited length of param/s");
 
     sendData(MSG, (TCP_DataStruct){.message = msg,
                                    .display_name = this->display_name});
@@ -103,10 +99,8 @@ void TCPClass::send_join (std::string channel_id) {
         throw ("Can't process join outside of open state");
 
     // Check for allowed sizes of params
-    if (channel_id.length() > CHANNEL_ID_MAX_LENGTH) {
-        OutputClass::out_err_intern("Prohibited length of param/s");
-        return;
-    }
+    if (channel_id.length() > CHANNEL_ID_MAX_LENGTH)
+        throw  ("Prohibited length of param/s");
 
     sendData(JOIN, (TCP_DataStruct){.display_name = this->display_name,
                                     .channel_id = channel_id});
@@ -114,7 +108,7 @@ void TCPClass::send_join (std::string channel_id) {
 
 void TCPClass::send_rename (std::string new_display_name) {
     if (new_display_name.length() > DISPLAY_NAME_MAX_LENGTH)
-        OutputClass::out_err_intern("Prohibited length of param/s");
+        throw ("Prohibited length of param/s");
     else
         this->display_name = new_display_name;
 }
@@ -132,10 +126,9 @@ void TCPClass::sendData (uint8_t type, TCP_DataStruct send_data) {
     ssize_t bytes_send = send(this->socket_id, out_buffer, strlen(out_buffer), 0);
 
     // Check for errors
-    if (bytes_send < 0) {
-        OutputClass::out_err_intern("Error while sending data to server");
+    if (bytes_send <= 0) {
         session_end();
-        return;
+        throw ("Error while sending data to server");
     }
 }
 /***********************************************************************************/
@@ -157,15 +150,13 @@ MSG_TYPE TCPClass::get_msg_type (std::string first_msg_word) {
 /***********************************************************************************/
 void TCPClass::receive () {
     char in_buffer[MAXLENGTH];
-    socklen_t sock_len;
 
     ssize_t bytes_received = recv(socket_id, in_buffer, MAXLENGTH, 0);
 
     // Check for errors
     if (bytes_received <= 0) {
-        OutputClass::out_err_intern("Error while receiving data from server");
         session_end();
-        return;
+        throw ("Error while receiving data from server");
     }
 
     in_buffer[bytes_received] = '\0';
@@ -229,7 +220,7 @@ void TCPClass::proces_response (uint8_t resp, TCP_DataStruct& resp_data) {
             break;
         default:
             // Not expected state, output error
-            OutputClass::out_err_intern("Unknown current state");
+            throw ("Unknown current state");
             break;
     }
 }
@@ -250,7 +241,7 @@ TCP_DataStruct TCPClass::deserialize_msg (uint8_t msg_type, std::string msg) {
             out.message = this->line_vec.at(4);
             break;
         default:
-            OutputClass::out_err_intern("Unknown message type provided");
+            throw ("Unknown message type provided");
             break;
     }
     // Return deserialized message
@@ -277,7 +268,7 @@ std::string TCPClass::convert_to_string (uint8_t type, TCP_DataStruct& data) {
             msg = "BYE\r\n";
             break;
         default:
-            OutputClass::out_err_intern("Unknown message type provided");
+            throw ("Unknown message type provided");
             break;
     }
     // Return composed message

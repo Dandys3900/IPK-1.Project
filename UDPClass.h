@@ -1,7 +1,7 @@
 #ifndef UDPCLASS_H
 #define UDPCLASS_H
 
-#include "ConstsFile.h"
+#include "AbstractClass.h"
 
 typedef struct {
     uint8_t type             = NO_TYPE; // 1 byte
@@ -15,7 +15,7 @@ typedef struct {
     std::string channel_id   = "";      // N bytes
 } UDP_DataStruct;
 
-class UDPClass {
+class UDPClass : public AbstractClass {
     private:
         // Transport data
         uint16_t msg_id;
@@ -55,13 +55,13 @@ class UDPClass {
         UDPClass (std::map<std::string, std::string> data_map);
         ~UDPClass ();
 
-        void open_connection ();
+        void open_connection () override;
 
-        void send_auth (UDP_DataStruct cmd_data);
-        void send_msg (std::string msg);
-        void send_join (std::string channel_id);
-        void send_rename (std::string new_display_name);
-        void send_bye ();
+        void send_auth (std::string user_name, std::string display_name, std::string secret) override;
+        void send_msg (std::string msg) override;
+        void send_join (std::string channel_id) override;
+        void send_rename (std::string new_display_name) override;
+        void send_bye () override;
 };
 
 #endif // UDPCLASS_H
