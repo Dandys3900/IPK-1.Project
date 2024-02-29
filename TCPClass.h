@@ -23,6 +23,8 @@ class TCPClass : public AbstractClass {
         // Inner values
         std::string display_name;
         FSM_STATE cur_state;
+        std::thread recv_thread;
+        bool stop_recv;
 
         // Vector for storing words of received message
         std::vector<std::string> line_vec;
@@ -40,7 +42,7 @@ class TCPClass : public AbstractClass {
 
     public:
         TCPClass (std::map<std::string, std::string> data_map);
-        ~TCPClass ();
+        ~TCPClass () {};
 
         void open_connection () override;
 

@@ -6,6 +6,8 @@ TCPClass::TCPClass (std::map<std::string, std::string> data_map)
       socket_id       (-1),
       display_name    (),
       cur_state       (S_START),
+      recv_thread     (),
+      stop_recv       (false),
       line_vec        ()
 {
     std::map<std::string, std::string>::iterator iter;
@@ -15,10 +17,6 @@ TCPClass::TCPClass (std::map<std::string, std::string> data_map)
 
     if ((iter = data_map.find("port")) != data_map.end())
         this->port = uint16_t{std::stoi(iter->second)};
-}
-
-TCPClass::~TCPClass ()
-{
 }
 
 /***********************************************************************************/
@@ -47,16 +45,22 @@ void TCPClass::open_connection () {
         session_end();
         throw ("Error connecting to TCP server");
     }
+
+    // Create thread to listen to server msgs
+    this->recv_thread = std::thread(&TCPClass::receive, this);
 }
 /***********************************************************************************/
 void TCPClass::session_end () {
+    this->stop_recv = true;
+    // Stop the thread
+    this->recv_thread.join();
     // Change state
     cur_state = S_END;
-    // Close socket
+
     shutdown(this->socket_id, SHUT_RD);
     shutdown(this->socket_id, SHUT_WR);
     shutdown(this->socket_id, SHUT_RDWR);
-
+    // Close socket
     close(this->socket_id);
 }
 /***********************************************************************************/
@@ -65,12 +69,8 @@ void TCPClass::send_auth (std::string user_name, std::string display_name, std::
         throw ("Can't sendData message outside of open state");
 
     // Check for allowed sizes of params
-    if (user_name.length() > USERNAME_MAX_LENGTH ||
-        display_name.length() > DISPLAY_NAME_MAX_LENGTH ||
-        secret.length() > SECRET_MAX_LENGTH)
-    {
+    if (user_name.length() > USERNAME_MAX_LENGTH || display_name.length() > DISPLAY_NAME_MAX_LENGTH || secret.length() > SECRET_MAX_LENGTH)
         throw ("Prohibited length of param/s");
-    }
 
     // Update displayname
     this->display_name = display_name;
@@ -151,22 +151,24 @@ MSG_TYPE TCPClass::get_msg_type (std::string first_msg_word) {
 void TCPClass::receive () {
     char in_buffer[MAXLENGTH];
 
-    ssize_t bytes_received = recv(socket_id, in_buffer, MAXLENGTH, 0);
+    while (!this->stop_recv) {
+        ssize_t bytes_received = recv(socket_id, in_buffer, MAXLENGTH, 0);
 
-    // Check for errors
-    if (bytes_received <= 0) {
-        session_end();
-        throw ("Error while receiving data from server");
+        // Check for errors
+        if (bytes_received <= 0) {
+            session_end();
+            throw ("Error while receiving data from server");
+        }
+
+        in_buffer[bytes_received] = '\0';
+        std::string response(in_buffer);
+
+        // Load whole message - each msg ends with "\r\n";
+        get_line_words(response.substr(0, response.find("\r\n")), this->line_vec);
+
+        TCP_DataStruct resp_data = deserialize_msg(get_msg_type(this->line_vec.at(0)), response);
+        proces_response(get_msg_type(this->line_vec.at(0)), resp_data);
     }
-
-    in_buffer[bytes_received] = '\0';
-    std::string response(in_buffer);
-
-    // Load whole message - each msg ends with "\r\n";
-    get_line_words(response.substr(0, response.find("\r\n")), this->line_vec);
-
-    TCP_DataStruct resp_data = deserialize_msg(get_msg_type(this->line_vec.at(0)), response);
-    proces_response(get_msg_type(this->line_vec.at(0)), resp_data);
 }
 /***********************************************************************************/
 void TCPClass::proces_response (uint8_t resp, TCP_DataStruct& resp_data) {
@@ -215,13 +217,13 @@ void TCPClass::proces_response (uint8_t resp, TCP_DataStruct& resp_data) {
             cur_state = S_END;
             send_bye();
             break;
+        case S_START:
         case S_END:
-            // Ignore
+            // Ignore everything
             break;
         default:
             // Not expected state, output error
             throw ("Unknown current state");
-            break;
     }
 }
 /***********************************************************************************/
