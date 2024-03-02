@@ -144,9 +144,6 @@ void UDPClass::handle_send (uint8_t msg_type, UDP_DataStruct send_data) {
             sendData(msg_type, send_data);
             if (msg_type != CONFIRM)
                 receive(true);
-
-            if (msg_type != CONFIRM && msg_type != BYE)
-                receive(false);
             break;
         } catch (const char* err_msg) {
             if (std::string(err_msg) == std::string("Timeout")) // Repeat when timeout event

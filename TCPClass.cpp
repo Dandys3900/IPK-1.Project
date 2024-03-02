@@ -231,7 +231,8 @@ TCP_DataStruct TCPClass::deserialize_msg (uint8_t msg_type, std::string msg) {
     TCP_DataStruct out;
 
     switch (msg_type) {
-        case REPLY: // REPLY IS {MessageContent}\r\n
+        case REPLY: // REPLY OK/NOK IS {MessageContent}\r\n
+            out.result = ((this->line_vec.at(1) == std::string("OK")) ? true : false);
             out.message = this->line_vec.at(2);
             break;
         case MSG: // MSG FROM {DisplayName} IS {MessageContent}\r\n
