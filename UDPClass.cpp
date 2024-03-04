@@ -32,11 +32,11 @@ UDPClass::UDPClass (std::map<std::string, std::string> data_map)
 void UDPClass::open_connection () {
     // Create UDP socket
     if ((this->socket_id = socket(AF_INET, SOCK_DGRAM, 0)) <= 0)
-        throw ("UDP socket creation failed");
+        throw std::string("UDP socket creation failed");
 
     struct hostent* server = gethostbyname(this->server_hostname.c_str());
     if (!server)
-        throw ("Unknown or invalid hostname provided");
+        throw std::string("Unknown or invalid hostname provided");
 
     // Setup server details
     struct sockaddr_in server_addr;
@@ -51,6 +51,9 @@ void UDPClass::open_connection () {
     // Store to class
     this->sock_str = server_addr;
 
+    // Set proper timeout
+    set_socket_timeout(this->timeout);
+
     // Create thread to listen to server msgs
     this->recv_thread = std::thread(&UDPClass::receive, this, false);
 }
@@ -61,20 +64,21 @@ void UDPClass::session_end () {
     this->recv_thread.join();
     // Change state
     cur_state = S_END;
-    // Send bye message
-    handle_send(BYE, (UDP_DataStruct){.type = BYE,
-                                      .msg_id = (this->msg_id)++});
     // Close socket
     close(this->socket_id);
 }
 /***********************************************************************************/
 void UDPClass::send_auth (std::string user_name, std::string display_name, std::string secret) {
     if (cur_state != S_START)
-        throw ("Can't send message outside of open state");
+        throw std::string("Can't send message outside of open state");
 
     // Check for allowed sizes of params
     if (user_name.length() > USERNAME_MAX_LENGTH || display_name.length() > DISPLAY_NAME_MAX_LENGTH || secret.length() > SECRET_MAX_LENGTH)
-        throw ("Prohibited length of param/s");
+        throw std::string("Prohibited length of param/s");
+
+    // Check for allowed chars used
+    if (!str_alphanums(user_name) || !str_printable(display_name, false) || !str_alphanums(secret))
+        throw std::string("Prohibited chars used");
 
     // Update display name
     this->display_name = display_name;
@@ -96,11 +100,15 @@ void UDPClass::send_auth (std::string user_name, std::string display_name, std::
 
 void UDPClass::send_msg (std::string msg) {
     if (cur_state != S_OPEN)
-        throw ("Can't send message outside of open state");
+        throw std::string("Can't send message outside of open state");
 
     // Check for allowed sizes of params
     if (msg.length() > MESSAGE_MAX_LENGTH)
-        throw ("Prohibited length of param/s");
+        throw std::string("Prohibited length of param/s");
+
+    // Check for allowed chars used
+    if (!str_printable(msg, true))
+        throw std::string("Prohibited chars used");
 
     handle_send(MSG, (UDP_DataStruct){.type = MSG,
                                       .msg_id = (this->msg_id)++,
@@ -110,11 +118,15 @@ void UDPClass::send_msg (std::string msg) {
 
 void UDPClass::send_join (std::string channel_id) {
     if (cur_state != S_OPEN)
-        throw ("Can't process join outside of open state");
+        throw std::string("Can't process join outside of open state");
 
     // Check for allowed sizes of params
     if (channel_id.length() > CHANNEL_ID_MAX_LENGTH)
-        throw ("Prohibited length of param/s");
+        throw std::string("Prohibited length of param/s");
+
+    // Check for allowed chars used
+    if (!str_alphanums(channel_id))
+        throw std::string("Prohibited chars used");
 
     handle_send(JOIN, (UDP_DataStruct){.type = JOIN,
                                        .msg_id = (this->msg_id)++,
@@ -123,17 +135,21 @@ void UDPClass::send_join (std::string channel_id) {
 }
 
 void UDPClass::send_rename (std::string new_display_name) {
-    if (new_display_name.length() > DISPLAY_NAME_MAX_LENGTH)
-        throw ("Prohibited length of param/s");
+    if (new_display_name.length() > DISPLAY_NAME_MAX_LENGTH || !str_printable(new_display_name, false))
+        throw std::string("Invalid new value for display name");
     else
         this->display_name = new_display_name;
 }
 
 void UDPClass::send_confirm () {
-    handle_send(CONFIRM, (UDP_DataStruct){.type = CONFIRM,
-                                          .ref_msg_id = this->msg_id});
+    sendData(CONFIRM, (UDP_DataStruct){.type = CONFIRM,
+                                       .ref_msg_id = this->msg_id});
 }
 void UDPClass::send_bye () {
+    // Send bye message
+    handle_send(BYE, (UDP_DataStruct){.type = BYE,
+                                      .msg_id = (this->msg_id)++});
+    // End session
     session_end();
 }
 /***********************************************************************************/
@@ -142,10 +158,9 @@ void UDPClass::handle_send (uint8_t msg_type, UDP_DataStruct send_data) {
         try {
             // Send message to server
             sendData(msg_type, send_data);
-            if (msg_type != CONFIRM)
-                receive(true);
+            receive(true);
             break;
-        } catch (const char* err_msg) {
+        } catch (std::string err_msg) {
             if (std::string(err_msg) == std::string("Timeout")) // Repeat when timeout event
                 continue;
             OutputClass::out_err_intern(std::string(err_msg));
@@ -175,7 +190,7 @@ void UDPClass::sendData (uint8_t type, UDP_DataStruct send_data) {
     // Check for errors
     if (bytes_send <= 0) {
         session_end();
-        throw ("Error while sending data to server");
+        throw std::string("Error while sending data to server");
     }
 }
 /***********************************************************************************/
@@ -183,24 +198,27 @@ void UDPClass::receive (bool expect_confirm) {
     char in_buffer[MAXLENGTH];
     socklen_t sock_len;
 
-    // Se proper timeout
-    if (expect_confirm) set_socket_timeout(this->timeout);
-    else set_socket_timeout(0);
-
-    while (!this-stop_recv) {
+    while (this->stop_recv == false) {
         ssize_t bytes_received =
             recvfrom(this->socket_id, in_buffer, MAXLENGTH, 0, (struct sockaddr*)&(this->sock_str), &sock_len);
 
+        if (this->stop_recv == true) // Stop when requested
+            break;
+
         // Check for errors
         if (bytes_received <= 0) {
-            if ((errno == EWOULDBLOCK || errno == EAGAIN) && expect_confirm) // Confirmation timeout event
-                throw ("Timeout");
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                if (expect_confirm) // Confirmation timeout event
+                    throw std::string("Timeout");
+                continue;
+            }
             session_end();
-            throw ("Error while receiving data from server");
+            throw std::string("Error while receiving data from server");
         }
 
         in_buffer[bytes_received] = '\0';
         std::string response(in_buffer);
+        std::cout << response.c_str() << std::endl;
         // Extract message type - 1 BYTE
         uint8_t msg_type = std::stoi(response.substr(0, 1));
         // Extract message ID - 2 BYTES
@@ -215,12 +233,16 @@ void UDPClass::receive (bool expect_confirm) {
             }
             continue;
         }
+        else if (expect_confirm)
+            continue;
 
         // Check vector of already processed message IDs
         if ((std::find(processed_msgs.begin(), processed_msgs.end(), msg_id)) == processed_msgs.end()) {
             // Store and mark as proceeded msg ID
             processed_msgs.push_back(msg_id);
             UDP_DataStruct data = deserialize_msg(msg_type, msg_id, response);
+            std::cout << "desrialzied reply:";
+            std::cout << "type: " << data.type << "result: " << data.result << "ref msg id: " << data.ref_msg_id << "msg: " << data.message << std::endl;
             proces_response(msg_type, data);
         }
         else // Only send confirmation to sender
@@ -290,26 +312,22 @@ void UDPClass::proces_response (uint8_t resp, UDP_DataStruct& resp_data) {
             break;
         default:
             // Not expected state, output error
-            throw ("Unknown current state");
+            throw std::string("Unknown current state");
     }
 }
 /***********************************************************************************/
 UDP_DataStruct UDPClass::deserialize_msg (uint8_t msg_type, uint16_t msg_id, std::string msg) {
     UDP_DataStruct out;
-    out.type = msg_type;
+    out.type = msg_type; // Message TYPE
+    out.msg_id = msg_id; // Message ID
 
     size_t null_char_pos;
     // Keeps track of current position in msg from where value is loaded
     size_t pos_in_msg = 0;
-    pos_in_msg += sizeof(out.type);
+    pos_in_msg += sizeof(out.type) + sizeof(out.msg_id);
 
     switch (msg_type) {
-        case CONFIRM:
-            out.ref_msg_id = msg_id; // Message ID
-            break;
         case REPLY:
-            out.msg_id = msg_id; // Message ID
-            pos_in_msg += sizeof(out.msg_id);
             // Result
             out.result = std::stoi(msg.substr(pos_in_msg, 1));
             pos_in_msg += sizeof(out.result);
@@ -320,8 +338,6 @@ UDP_DataStruct UDPClass::deserialize_msg (uint8_t msg_type, uint16_t msg_id, std
             out.message = msg.substr(pos_in_msg);
             break;
         case MSG:
-            out.msg_id = msg_id; // Message ID
-            pos_in_msg += sizeof(out.msg_id);
             // Display name
             null_char_pos = msg.find_first_of('\0');
             out.display_name = msg.substr(pos_in_msg, (null_char_pos - pos_in_msg));
@@ -330,8 +346,6 @@ UDP_DataStruct UDPClass::deserialize_msg (uint8_t msg_type, uint16_t msg_id, std
             out.message = msg.substr(pos_in_msg);
             break;
         case ERR:
-            out.msg_id = msg_id; // Message ID
-            pos_in_msg += sizeof(out.msg_id);
             // Display name
             null_char_pos = msg.find_first_of('\0');
             out.display_name = msg.substr(pos_in_msg, (null_char_pos - pos_in_msg));
@@ -340,7 +354,7 @@ UDP_DataStruct UDPClass::deserialize_msg (uint8_t msg_type, uint16_t msg_id, std
             out.message = msg.substr(pos_in_msg);
             break;
         default:
-            throw ("Unknown message type provided");
+            throw std::string("Unknown message type provided");
             break;
     }
     // Return deserialized message
@@ -348,29 +362,29 @@ UDP_DataStruct UDPClass::deserialize_msg (uint8_t msg_type, uint16_t msg_id, std
 }
 /***********************************************************************************/
 std::string UDPClass::convert_to_string (uint8_t type, UDP_DataStruct& data) {
-    std::string msg;
+    std::string msg = std::to_string(data.type);
 
     switch (type) {
         case CONFIRM:
-            msg = std::to_string(data.type) + std::to_string(data.ref_msg_id);
+            msg += std::to_string(data.ref_msg_id);
             break;
         case AUTH:
-            msg = std::to_string(data.type) + std::to_string(data.msg_id) + data.user_name + '\0' + this->display_name + '\0' + data.secret + '\0';
+            msg += std::to_string(data.msg_id) + data.user_name + '\0' + this->display_name + '\0' + data.secret + '\0';
             break;
         case JOIN:
-            msg = std::to_string(data.type) + std::to_string(data.msg_id) + data.channel_id + '\0' + this->display_name + '\0';
+            msg += std::to_string(data.msg_id) + data.channel_id + '\0' + this->display_name + '\0';
             break;
         case MSG:
-            msg = std::to_string(data.type) + std::to_string(data.msg_id) + this->display_name + '\0' + data.message + '\0';
+            msg += std::to_string(data.msg_id) + this->display_name + '\0' + data.message + '\0';
             break;
         case ERR:
-            msg = std::to_string(data.type) + std::to_string(data.msg_id) + this->display_name + '\0' + data.message + '\0';
+            msg += std::to_string(data.msg_id) + this->display_name + '\0' + data.message + '\0';
             break;
         case BYE:
-            msg = std::to_string(data.type) + std::to_string(data.msg_id);
+            msg += std::to_string(data.msg_id);
             break;
         default:
-            throw ("Unknown message type provided");
+            throw std::string("Unknown message type provided");
             break;
     }
     // Return composed message

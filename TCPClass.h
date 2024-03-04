@@ -31,9 +31,10 @@ class TCPClass : public AbstractClass {
 
         // Helper methods
         void session_end ();
+        void set_socket_timeout (uint16_t timeout);
         MSG_TYPE get_msg_type (std::string first_msg_word);
         std::string convert_to_string (uint8_t type, TCP_DataStruct& data);
-        TCP_DataStruct deserialize_msg (uint8_t msg_type, std::string msg);
+        TCP_DataStruct deserialize_msg (uint8_t msg_type);
 
         // Send/receive methos
         void sendData (uint8_t type, TCP_DataStruct send_data);

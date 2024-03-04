@@ -17,6 +17,7 @@
 #include <csignal>
 #include <sstream>
 #include <thread>
+#include <regex>
 
 #include "OutputClass.h"
 

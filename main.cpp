@@ -50,7 +50,7 @@ int main (int argc, char *argv[]) {
     // Try opening new connection
     try {
         client->open_connection();
-    } catch (const char* err_msg) {
+    } catch (std::string err_msg) {
         OutputClass::out_err_intern(std::string(err_msg));
         return EXIT_FAILURE;
     }
@@ -97,7 +97,7 @@ int main (int argc, char *argv[]) {
             }
             else // Msg to send
                 client->send_msg(user_line);
-        } catch (const char* err_msg) {
+        } catch (std::string err_msg) {
             // Output error but continue
             OutputClass::out_err_intern(std::string(err_msg));
         }

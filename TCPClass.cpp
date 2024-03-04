@@ -23,11 +23,11 @@ TCPClass::TCPClass (std::map<std::string, std::string> data_map)
 void TCPClass::open_connection () {
     // Create TCP socket
     if ((this->socket_id = socket(AF_INET, SOCK_STREAM, 0)) <= 0)
-        throw ("TCP socket creation failed");
+        throw std::string("TCP socket creation failed");
 
     struct hostent* server = gethostbyname(this->server_hostname.c_str());
     if (!server)
-        throw ("Unknown or invalid hostname provided");
+        throw std::string("Unknown or invalid hostname provided");
 
     // Setup server details
     struct sockaddr_in server_addr;
@@ -43,8 +43,11 @@ void TCPClass::open_connection () {
     // Connect to server
     if (connect(this->socket_id, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0) {
         session_end();
-        throw ("Error connecting to TCP server");
+        throw std::string("Error connecting to TCP server");
     }
+
+    // Set proper timeout
+    set_socket_timeout(250); // 250ms
 
     // Create thread to listen to server msgs
     this->recv_thread = std::thread(&TCPClass::receive, this);
@@ -64,13 +67,27 @@ void TCPClass::session_end () {
     close(this->socket_id);
 }
 /***********************************************************************************/
+void TCPClass::set_socket_timeout (uint16_t timeout /*miliseconds*/) {
+    struct timeval time = {
+        .tv_sec = 0,
+        .tv_usec = suseconds_t(timeout * 1000)
+    };
+
+    if (setsockopt(this->socket_id, SOL_SOCKET, SO_RCVTIMEO, (char*)&(time), sizeof(struct timeval)) < 0)
+        throw ("Setting receive timeout failed");
+}
+/***********************************************************************************/
 void TCPClass::send_auth (std::string user_name, std::string display_name, std::string secret) {
     if (cur_state != S_START)
-        throw ("Can't sendData message outside of open state");
+        throw std::string("Can't sendData message outside of open state");
 
     // Check for allowed sizes of params
     if (user_name.length() > USERNAME_MAX_LENGTH || display_name.length() > DISPLAY_NAME_MAX_LENGTH || secret.length() > SECRET_MAX_LENGTH)
-        throw ("Prohibited length of param/s");
+        throw std::string("Prohibited length of param/s");
+
+    // Check for allowed chars used
+    if (!str_alphanums(user_name) || !str_printable(display_name, false) || !str_alphanums(secret))
+        throw std::string("Prohibited chars used");
 
     // Update displayname
     this->display_name = display_name;
@@ -84,11 +101,15 @@ void TCPClass::send_auth (std::string user_name, std::string display_name, std::
 
 void TCPClass::send_msg (std::string msg) {
     if (cur_state != S_OPEN)
-        throw ("Can't sendData message outside of open state");
+        throw std::string("Can't sendData message outside of open state");
 
     // Check for allowed sizes of params
     if (msg.length() > MESSAGE_MAX_LENGTH)
-        throw  ("Prohibited length of param/s");
+        throw std::string ("Prohibited length of param/s");
+
+    // Check for allowed chars used
+    if (!str_printable(msg, true))
+        throw std::string("Prohibited chars used");
 
     sendData(MSG, (TCP_DataStruct){.message = msg,
                                    .display_name = this->display_name});
@@ -96,24 +117,30 @@ void TCPClass::send_msg (std::string msg) {
 
 void TCPClass::send_join (std::string channel_id) {
     if (cur_state != S_OPEN)
-        throw ("Can't process join outside of open state");
+        throw std::string("Can't process join outside of open state");
 
     // Check for allowed sizes of params
     if (channel_id.length() > CHANNEL_ID_MAX_LENGTH)
-        throw  ("Prohibited length of param/s");
+        throw std::string ("Prohibited length of param/s");
+
+    // Check for allowed chars used
+    if (!str_alphanums(channel_id))
+        throw std::string("Prohibited chars used");
 
     sendData(JOIN, (TCP_DataStruct){.display_name = this->display_name,
                                     .channel_id = channel_id});
 }
 
 void TCPClass::send_rename (std::string new_display_name) {
-    if (new_display_name.length() > DISPLAY_NAME_MAX_LENGTH)
-        throw ("Prohibited length of param/s");
+    if (new_display_name.length() > DISPLAY_NAME_MAX_LENGTH || !str_printable(new_display_name, false))
+        throw std::string("Prohibited length of param/s");
     else
         this->display_name = new_display_name;
 }
 
 void TCPClass::send_bye () {
+    // Send bye message
+    sendData(BYE, (TCP_DataStruct){});
     session_end();
 }
 /***********************************************************************************/
@@ -128,7 +155,7 @@ void TCPClass::sendData (uint8_t type, TCP_DataStruct send_data) {
     // Check for errors
     if (bytes_send <= 0) {
         session_end();
-        throw ("Error while sending data to server");
+        throw std::string("Error while sending data to server");
     }
 }
 /***********************************************************************************/
@@ -151,13 +178,18 @@ MSG_TYPE TCPClass::get_msg_type (std::string first_msg_word) {
 void TCPClass::receive () {
     char in_buffer[MAXLENGTH];
 
-    while (!this->stop_recv) {
+    while (this->stop_recv == false) {
         ssize_t bytes_received = recv(socket_id, in_buffer, MAXLENGTH, 0);
+
+        if (this->stop_recv == true) // Stop when requested
+            break;
 
         // Check for errors
         if (bytes_received <= 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) // Timeout, repeat loop
+                continue;
             session_end();
-            throw ("Error while receiving data from server");
+            throw std::string("Error while receiving data from server");
         }
 
         in_buffer[bytes_received] = '\0';
@@ -166,7 +198,7 @@ void TCPClass::receive () {
         // Load whole message - each msg ends with "\r\n";
         get_line_words(response.substr(0, response.find("\r\n")), this->line_vec);
 
-        TCP_DataStruct resp_data = deserialize_msg(get_msg_type(this->line_vec.at(0)), response);
+        TCP_DataStruct resp_data = deserialize_msg(get_msg_type(this->line_vec.at(0)));
         proces_response(get_msg_type(this->line_vec.at(0)), resp_data);
     }
 }
@@ -223,11 +255,11 @@ void TCPClass::proces_response (uint8_t resp, TCP_DataStruct& resp_data) {
             break;
         default:
             // Not expected state, output error
-            throw ("Unknown current state");
+            throw std::string("Unknown current state");
     }
 }
 /***********************************************************************************/
-TCP_DataStruct TCPClass::deserialize_msg (uint8_t msg_type, std::string msg) {
+TCP_DataStruct TCPClass::deserialize_msg (uint8_t msg_type) {
     TCP_DataStruct out;
 
     switch (msg_type) {
@@ -244,7 +276,7 @@ TCP_DataStruct TCPClass::deserialize_msg (uint8_t msg_type, std::string msg) {
             out.message = this->line_vec.at(4);
             break;
         default:
-            throw ("Unknown message type provided");
+            throw std::string("Unknown message type provided");
             break;
     }
     // Return deserialized message
@@ -271,7 +303,7 @@ std::string TCPClass::convert_to_string (uint8_t type, TCP_DataStruct& data) {
             msg = "BYE\r\n";
             break;
         default:
-            throw ("Unknown message type provided");
+            throw std::string("Unknown message type provided");
             break;
     }
     // Return composed message
