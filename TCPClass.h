@@ -15,7 +15,6 @@ typedef struct {
 class TCPClass : public AbstractClass {
     private:
         // Transport data
-        std::string msg_id;
         uint16_t port;
         std::string server_hostname;
         int socket_id;
@@ -23,7 +22,7 @@ class TCPClass : public AbstractClass {
         // Inner values
         std::string display_name;
         FSM_STATE cur_state;
-        std::thread recv_thread;
+        std::jthread recv_thread;
         bool stop_recv;
 
         // Vector for storing words of received message

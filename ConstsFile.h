@@ -18,6 +18,7 @@
 #include <sstream>
 #include <thread>
 #include <regex>
+#include <future>
 
 #include "OutputClass.h"
 
@@ -32,7 +33,7 @@
 
 // Enum for message types
 enum MSG_TYPE {
-    NO_TYPE = -1,
+    NO_TYPE  = -1,
     CONFIRM  = 0x00,
     REPLY    = 0x01,
     AUTH     = 0x02,

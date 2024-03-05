@@ -23,12 +23,14 @@ class AbstractClass {
             while (ss >> line_word)
                 words_vec.push_back(line_word);
         }
+
         bool str_alphanums (std::string input) {
             const regex pattern("[a-zA-Z0-9]+");
             return regex_match(input, pattern);
         }
+
         bool str_printable (std::string input, bool incl_space) {
-            const regex pattern((incl_space) ? "[ -~]+" : "[-~]+");
+            const regex pattern((incl_space) ? "[ -~]+" : "[!-~]+");
             return regex_match(input, pattern);
         }
 

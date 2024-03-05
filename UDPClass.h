@@ -31,8 +31,11 @@ class UDPClass : public AbstractClass {
         std::string display_name;
         FSM_STATE cur_state;
         struct sockaddr_in sock_str;
-        std::thread recv_thread;
+        std::jthread recv_thread;
         bool stop_recv;
+        bool exp_cofirmation;
+        std::promise<std::string> promise;
+        uint16_t ref_msg_id;
 
         // Vector to store all msg_ids already received
         std::vector<uint16_t> processed_msgs;
@@ -49,7 +52,7 @@ class UDPClass : public AbstractClass {
         // Send/receive methos
         void sendData (uint8_t type, UDP_DataStruct send_data);
         void handle_send (uint8_t msg_type, UDP_DataStruct send_data);
-        void receive (bool expect_confirm);
+        void receive (std::promise<std::string>& promise);
         void proces_response (uint8_t resp, UDP_DataStruct& resp_data);
 
     public:
