@@ -6,7 +6,7 @@ AbstractClass* client;
 
 int main (int argc, char *argv[]) {
     // Store client type given by user
-    char* client_type = "";
+    char* client_type = nullptr;
 
     // Map for storing user values
     std::map<std::string, std::string> data_map;
@@ -59,20 +59,16 @@ int main (int argc, char *argv[]) {
     std::string user_line;
     std::vector<std::string> line_vec;
 
-    // Set interrput signal handling
+    // Set interrput signal handling - CTRL+C
     std::signal(SIGINT, [](int sig_val){
         client->send_bye();
-        exit(EXIT_SUCCESS);
+    });
+    // Set interrput signal handling - CTRL+backslash
+    std::signal(SIGQUIT, [](int sig_val){
+        client->send_bye();
     });
 
-    while (true) {
-        // End connection in case of EOF
-        if (std::cin.eof()) {
-            client->send_bye();
-            break;
-        }
-
-        std::getline(std::cin, user_line);
+    while (std::getline(std::cin, user_line)) {
         // Try process user command
         try {
             if (user_line.c_str()[0] == '/') {
@@ -102,7 +98,9 @@ int main (int argc, char *argv[]) {
             OutputClass::out_err_intern(std::string(err_msg));
         }
     }
-    delete client;
+    // EOF event - CTRL+D
+    client->send_bye();
 
+    delete client;
     return EXIT_SUCCESS;
 }

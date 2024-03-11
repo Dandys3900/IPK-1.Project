@@ -31,7 +31,7 @@ while(True):
         alreadySent = True
         # Sending a reply to client
         # Firstly send confimation msg
-        confirm_msg = "00"
+        confirm_msg = "000"
         bytesToSend   = str.encode(confirm_msg)
         UDPServerSocket.sendto(bytesToSend, address)
 

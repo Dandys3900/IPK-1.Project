@@ -14,7 +14,7 @@ TCPClass::TCPClass (std::map<std::string, std::string> data_map)
         this->server_hostname = iter->second;
 
     if ((iter = data_map.find("port")) != data_map.end())
-        this->port = uint16_t{std::stoi(iter->second)};
+        this->port = static_cast<uint16_t>(std::stoi(iter->second));
 }
 
 /***********************************************************************************/

@@ -1,11 +1,24 @@
 #ifndef UDPCLASS_H
 #define UDPCLASS_H
 
+#define HEADER_SIZE 3
+
 #include "AbstractClass.h"
 
+// Enum for possible thread events
+enum THREAD_EVENT {
+    NO_EVENT = 0,
+    TIMEOUT,
+    CONFIRMATION
+};
+
 typedef struct {
-    uint8_t type             = NO_TYPE; // 1 byte
-    uint16_t msg_id          = 0;       // 2 bytes
+    uint8_t type    = NO_TYPE; // 1 byte
+    uint16_t msg_id = 0;       // 2 bytes
+} UDP_Header;
+
+typedef struct {
+    UDP_Header header;                  // 3 bytes (msg_type + msg_id)
     uint16_t ref_msg_id      = 0;       // 2 bytes
     bool result              = false;   // 1 byte
     std::string message      = "";      // N bytes
@@ -20,40 +33,60 @@ class UDPClass : public AbstractClass {
         // Transport data
         uint16_t msg_id;
         uint16_t port;
-        std::string server_hostname;
-        int socket_id;
-
-        // Behaviour
         uint8_t recon_attempts;
         uint16_t timeout;
 
-        // Inner values
+        int socket_id;
+        int retval;
+
+        std::string server_hostname;
         std::string display_name;
-        FSM_STATE cur_state;
+
+        std::atomic<FSM_STATE> cur_state;
+        std::atomic<uint16_t> replying_to_id;
+        std::atomic<uint16_t> latest_sent_id;
+
+        UDP_DataStruct auth_data;
         struct sockaddr_in sock_str;
+
+        std::mutex send_mutex;
+        std::mutex session_end_mutex;
+        std::mutex editing_front_mutex;
+
+        std::jthread send_thread;
         std::jthread recv_thread;
-        bool stop_recv;
-        bool exp_cofirmation;
-        std::promise<std::string> promise;
-        uint16_t ref_msg_id;
 
         // Vector to store all msg_ids already received
         std::vector<uint16_t> processed_msgs;
 
-        UDP_DataStruct auth_data;
+        std::queue<std::pair<UDP_DataStruct&, uint>> messages_to_send;
+        std::condition_variable send_cond_var;
 
-        // Helper methods
+        bool stop_send;
+        bool stop_recv;
+
+        void send_message (UDP_DataStruct data);
+        void send_data (UDP_DataStruct data);
+        void send_err (std::string err_msg);
+        void send_confirm (uint16_t confirm_to_id);
         void session_end ();
-        void send_confirm ();
+        void handle_send ();                              // Thread for sending data to the server
+        void handle_receive ();                           // Thread for receiving messages from server
+        /* Helper methods */
         void set_socket_timeout (uint16_t timeout);
-        std::string convert_to_string (uint8_t type, UDP_DataStruct& data);
-        UDP_DataStruct deserialize_msg (uint8_t msg_type, uint16_t msg_id, std::string msg);
+        void deserialize_msg (UDP_DataStruct& out_str, const char* msg);
+        void get_msg_part (const char* input, size_t& input_pos, std::string& store_to);
+        void check_msg_valid (UDP_DataStruct& data);
+        void invalid_reply_id ();
+        void thread_event (THREAD_EVENT event);
+        void pop_from_queue ();
+        std::string convert_to_string (UDP_DataStruct data);
+        UDP_Header create_header (uint8_t type);
 
-        // Send/receive methos
-        void sendData (uint8_t type, UDP_DataStruct send_data);
-        void handle_send (uint8_t msg_type, UDP_DataStruct send_data);
-        void receive (std::promise<std::string>& promise);
-        void proces_response (uint8_t resp, UDP_DataStruct& resp_data);
+        //delete
+        void safePrint (const string& msg);
+        std::string get_msg_type (uint8_t type);
+        std::mutex print_mutex;
 
     public:
         UDPClass (std::map<std::string, std::string> data_map);

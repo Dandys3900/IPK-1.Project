@@ -15,10 +15,14 @@
 #include <algorithm>
 #include <map>
 #include <csignal>
-#include <sstream>
 #include <thread>
 #include <regex>
+#include <condition_variable>
+#include <mutex>
 #include <future>
+#include <queue>
+#include <unordered_map>
+#include <atomic>
 
 #include "OutputClass.h"
 
@@ -32,8 +36,8 @@
 #define MESSAGE_MAX_LENGTH 1400
 
 // Enum for message types
-enum MSG_TYPE {
-    NO_TYPE  = -1,
+enum MSG_TYPE : uint8_t {
+    NO_TYPE  = 0x05,
     CONFIRM  = 0x00,
     REPLY    = 0x01,
     AUTH     = 0x02,
@@ -44,7 +48,7 @@ enum MSG_TYPE {
 };
 
 // Enum FSM states
-enum FSM_STATE {
+enum FSM_STATE : uint8_t {
     S_START = 0,
     S_AUTH,
     S_OPEN,
