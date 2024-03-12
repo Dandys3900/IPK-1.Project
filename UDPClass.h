@@ -59,7 +59,7 @@ class UDPClass : public AbstractClass {
         // Vector to store all msg_ids already received
         std::vector<uint16_t> processed_msgs;
 
-        std::queue<std::pair<UDP_DataStruct&, uint>> messages_to_send;
+        std::queue<std::pair<UDP_DataStruct, uint>> messages_to_send;
         std::condition_variable send_cond_var;
 
         bool stop_send;
@@ -79,7 +79,6 @@ class UDPClass : public AbstractClass {
         void check_msg_valid (UDP_DataStruct& data);
         void invalid_reply_id ();
         void thread_event (THREAD_EVENT event);
-        void pop_from_queue ();
         std::string convert_to_string (UDP_DataStruct data);
         UDP_Header create_header (uint8_t type);
 
