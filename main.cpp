@@ -36,7 +36,7 @@ int main (int argc, char *argv[]) {
     }
 
     // Check if compulsory user values -t and -s were given
-    if (strcmp(client_type, "") == 0 || data_map.find("ipaddr") == data_map.end()) {
+    if (!client_type || data_map.find("ipaddr") == data_map.end()) {
         OutputClass::out_err_intern("Compulsory values are missing");
         return EXIT_FAILURE;
     }

@@ -78,7 +78,7 @@ class UDPClass : public AbstractClass {
         void get_msg_part (const char* input, size_t& input_pos, std::string& store_to);
         void check_msg_valid (UDP_DataStruct& data);
         void invalid_reply_id ();
-        void thread_event (THREAD_EVENT event);
+        void thread_event (THREAD_EVENT event, uint16_t confirm_to_id = -1);
         std::string convert_to_string (UDP_DataStruct data);
         UDP_Header create_header (uint8_t type);
 

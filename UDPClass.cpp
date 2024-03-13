@@ -8,7 +8,7 @@ UDPClass::UDPClass (std::map<std::string, std::string> data_map)
       socket_id        (-1),
       retval           (EXIT_SUCCESS),
       server_hostname  (""),
-      display_name     (""),
+      display_name     ("mock"), // TODO change back to blank IG
       cur_state        (S_START),
       replying_to_id   (-1),
       latest_sent_id   (-1),
@@ -235,6 +235,8 @@ void UDPClass::send_data (UDP_DataStruct data) {
     std::string message = convert_to_string(data);
     const char* out_buffer = message.data();
 
+    safePrint("sending msg type: " + get_msg_type(data.header.type));
+
     // Send data
     ssize_t bytes_send =
         sendto(this->socket_id, out_buffer, message.size(), 0, (struct sockaddr*)&(this->sock_str), sizeof(this->sock_str));
@@ -290,7 +292,6 @@ void UDPClass::handle_send () {
 
             // Avoid sending multiple msgs with the same msg_id
             if (to_send.first.header.msg_id != this->latest_sent_id.load(std::memory_order_relaxed)) {
-                safePrint("sending message type: " + get_msg_type(to_send.first.header.type));
                 // Send it to server
                 send_data(to_send.first);
 
@@ -304,9 +305,9 @@ void UDPClass::handle_send () {
     }
 }
 /***********************************************************************************/
-void UDPClass::thread_event (THREAD_EVENT event) {
+void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
+    std::lock_guard<std::mutex> lock(this->editing_front_mutex);
     if (!this->messages_to_send.empty()) {
-        std::lock_guard<std::mutex> lock(this->editing_front_mutex);
         auto& front_msg = this->messages_to_send.front();
         // Timeout event occured
         if (event == TIMEOUT) {
@@ -329,8 +330,8 @@ void UDPClass::thread_event (THREAD_EVENT event) {
             }
         }
         // Confirmation event occured
-        if (event == CONFIRMATION) {
-            safePrint("confirmation received");
+        if (event == CONFIRMATION && front_msg.first.header.msg_id == confirm_to_id) {
+            safePrint("confirmation for queue front msg received");
             // Pop it from queue and continue with another message (if any)
             this->messages_to_send.pop();
             // Confirmed BYE msg -> end connection
@@ -355,7 +356,7 @@ void UDPClass::handle_receive () {
             break;
 
         if (bytes_received <= 0) {
-            if ((errno == EWOULDBLOCK || errno == EAGAIN))
+            if ((errno == EWOULDBLOCK || errno == EAGAIN)) // Timeout event
                 thread_event(TIMEOUT);
             continue;
         }
@@ -363,19 +364,17 @@ void UDPClass::handle_receive () {
         // Store received data
         UDP_DataStruct data;
         // Load header
-        std::memcpy(&data.header, in_buffer, sizeof(UDP_DataStruct));
+        std::memcpy(&data.header, in_buffer, HEADER_SIZE);
 
-        if (data.header.type == CONFIRM) {
-            // We expect confirmation for current queue front message
-            if (!this->messages_to_send.empty() && this->messages_to_send.front().first.header.msg_id == data.header.msg_id)
-                thread_event(CONFIRMATION);
+        if (data.header.type == CONFIRM) { // Confirmation from server event
+            thread_event(CONFIRMATION, data.header.msg_id);
             continue;
         }
 
+        safePrint("RECEIVED TYPE: " + get_msg_type(data.header.type));
+
         // Send confirmation to the server before processing further
         send_confirm(data.header.msg_id);
-
-        safePrint("RECEIVED TYPE: " + get_msg_type(data.header.type));
 
         // Check vector of already processed message IDs
         if ((std::find(processed_msgs.begin(), processed_msgs.end(), data.header.msg_id)) == processed_msgs.end()) {
@@ -389,7 +388,9 @@ void UDPClass::handle_receive () {
                 OutputClass::out_err_intern(err_msg);
                 // Invalid message from server -> end connection
                 this->retval = EXIT_FAILURE;
+                send_err("Invalid message type received");
                 send_bye();
+                continue;
             }
         }
         else // Ignore and continue
@@ -409,8 +410,8 @@ void UDPClass::handle_receive () {
                         if (data.result == true) // Positive reply - switch to open
                             this->cur_state.store(S_OPEN, std::memory_order_relaxed);
                         else { // Negative reply -> resend auth msg
-                            /*this->auth_data.header = create_header(AUTH);
-                            send_message(this->auth_data);*/
+                            this->auth_data.header = create_header(AUTH);
+                            send_message(this->auth_data);
                         }
                         break;
                     case ERR: // Output error and end

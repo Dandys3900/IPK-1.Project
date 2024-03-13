@@ -31,11 +31,11 @@ while(True):
         alreadySent = True
         # Sending a reply to client
         # Firstly send confimation msg
-        #confirm_msg = "000"
-        #bytesToSend   = str.encode(confirm_msg)
-        #UDPServerSocket.sendto(bytesToSend, address)
+        confirm_msg = "000"
+        bytesToSend   = str.encode(confirm_msg)
+        UDPServerSocket.sendto(bytesToSend, address)
 
         # Now send reply msg to authenticate user
-        #reply_msg = "101100" + "Hello from server"
-        #bytesToSend   = str.encode(reply_msg)
-        #UDPServerSocket.sendto(bytesToSend, address)
+        reply_msg = "101100" + "Hello from server"
+        bytesToSend   = str.encode(reply_msg)
+        UDPServerSocket.sendto(bytesToSend, address)
