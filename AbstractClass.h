@@ -25,7 +25,7 @@ class AbstractClass {
         }
 
         bool str_alphanums (std::string input) {
-            const regex pattern("[a-zA-Z0-9-]+");
+            const regex pattern("[a-zA-Z0-9-.]+");
             return regex_match(input, pattern);
         }
 

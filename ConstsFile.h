@@ -26,7 +26,7 @@
 
 #include "OutputClass.h"
 
-#define MAXLENGTH 1024
+#define MAXLENGTH 2048
 
 #define USERNAME_MAX_LENGTH 20
 #define CHANNEL_ID_MAX_LENGTH 20

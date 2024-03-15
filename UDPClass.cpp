@@ -1,17 +1,17 @@
 #include "UDPClass.h"
 
 UDPClass::UDPClass (std::map<std::string, std::string> data_map)
-    : msg_id           (-1),
+    : msg_id           (0),
       port             (4567),
       recon_attempts   (3),
       timeout          (250),
       socket_id        (-1),
       retval           (EXIT_SUCCESS),
       server_hostname  (""),
-      display_name     ("mock"), // TODO change back to blank IG
+      display_name     (""),
       cur_state        (S_START),
-      replying_to_id   (-1),
-      latest_sent_id   (-1),
+      replying_to_id   (0),
+      latest_sent_id   (1), // Initially must be different from msg_id (0)
       stop_send        (false),
       stop_recv        (false)
 {
@@ -61,8 +61,6 @@ void UDPClass::open_connection () {
 }
 /***********************************************************************************/
 void UDPClass::session_end () {
-    std::unique_lock<std::mutex> lock(this->session_end_mutex);
-    safePrint("ending session");
     this->stop_send = true;
     // Notify
     this->send_cond_var.notify_one();
@@ -88,8 +86,6 @@ void UDPClass::send_auth (std::string user, std::string display, std::string sec
         .display_name = display,
         .secret = secret
     };
-
-    safePrint("send_auth called");
 
     // Move to auth state for handling reply msgs
     this->cur_state.store(S_AUTH, std::memory_order_relaxed);
@@ -208,9 +204,6 @@ void UDPClass::set_socket_timeout (uint16_t timeout /*miliseconds*/) {
 }
 /***********************************************************************************/
 void UDPClass::send_message (UDP_DataStruct data) {
-    // Avoid racing between main and response thread
-    std::lock_guard<std::mutex> lock(this->editing_front_mutex);
-
     try { // Check for msg integrity
         check_msg_valid(data);
     } catch (std::string err_msg) {
@@ -219,23 +212,24 @@ void UDPClass::send_message (UDP_DataStruct data) {
         return;
     }
 
-    safePrint("adding msg to queue: " + get_msg_type(data.header.type));
-    // Add new message to the queue with given resend count
-    this->messages_to_send.push({data, this->recon_attempts});
+    {
+        // Avoid racing between main and response thread
+        std::lock_guard<std::mutex> lock(this->editing_front_mutex);
+        // Add new message to the queue with given resend count
+        this->messages_to_send.push({data, this->recon_attempts});
+    }
 
     // Notify send thread about message to be send
     this->send_cond_var.notify_one();
 }
 /***********************************************************************************/
-void UDPClass::send_data (UDP_DataStruct data) {
+void UDPClass::send_data (UDP_DataStruct& data) {
     // Store msg_id to avoid multiple sends of the same msg in handle_send
     this->latest_sent_id.store(data.header.msg_id, std::memory_order_relaxed);
 
     // Prepare data to send
     std::string message = convert_to_string(data);
     const char* out_buffer = message.data();
-
-    safePrint("sending msg type: " + get_msg_type(data.header.type));
 
     // Send data
     ssize_t bytes_send =
@@ -247,34 +241,6 @@ void UDPClass::send_data (UDP_DataStruct data) {
         this->retval = EXIT_FAILURE;
         session_end();
     }
-}
-/***********************************************************************************/
-std::string UDPClass::get_msg_type (uint8_t type) {
-    switch (type) {
-        case NO_TYPE:
-            return std::string("No type");
-        case CONFIRM:
-            return std::string("Confirm type");
-        case REPLY:
-            return std::string("Reply type");
-        case AUTH:
-            return std::string("Auth type");
-        case JOIN:
-            return std::string("Join type");
-        case MSG:
-            return std::string("Msg type");
-        case ERR:
-            return std::string("Err type");
-        case BYE:
-            return std::string("Bye type");
-        default:
-            return std::string("No type");
-    }
-}
-/***********************************************************************************/
-void UDPClass::safePrint (const string& msg) {
-    std::lock_guard<std::mutex> lock(this->print_mutex);
-    std::cout << msg << std::endl;
 }
 /***********************************************************************************/
 void UDPClass::handle_send () {
@@ -307,6 +273,7 @@ void UDPClass::handle_send () {
 /***********************************************************************************/
 void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
     std::lock_guard<std::mutex> lock(this->editing_front_mutex);
+
     if (!this->messages_to_send.empty()) {
         auto& front_msg = this->messages_to_send.front();
         // Timeout event occured
@@ -317,9 +284,10 @@ void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
                 front_msg.second -= 1;
                 // Update msg_id since in fact considered as new message
                 front_msg.first.header = create_header(front_msg.first.header.type);
+                this->replying_to_id.store(front_msg.first.header.msg_id, std::memory_order_relaxed);
             }
             else {
-                // Confirmed BYE msg from server -> end connection
+                // BYE msg to server timeouted -> end connection
                 if (front_msg.first.header.type == BYE)
                     session_end();
 
@@ -330,8 +298,7 @@ void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
             }
         }
         // Confirmation event occured
-        if (event == CONFIRMATION && front_msg.first.header.msg_id == confirm_to_id) {
-            safePrint("confirmation for queue front msg received");
+        else if (event == CONFIRMATION && front_msg.first.header.msg_id == confirm_to_id) {
             // Pop it from queue and continue with another message (if any)
             this->messages_to_send.pop();
             // Confirmed BYE msg -> end connection
@@ -364,14 +331,13 @@ void UDPClass::handle_receive () {
         // Store received data
         UDP_DataStruct data;
         // Load header
-        std::memcpy(&data.header, in_buffer, HEADER_SIZE);
+        std::memcpy(&data.header, in_buffer, sizeof(UDP_Header));
+        data.header.msg_id = htons(data.header.msg_id);
 
         if (data.header.type == CONFIRM) { // Confirmation from server event
             thread_event(CONFIRMATION, data.header.msg_id);
             continue;
         }
-
-        safePrint("RECEIVED TYPE: " + get_msg_type(data.header.type));
 
         // Send confirmation to the server before processing further
         send_confirm(data.header.msg_id);
@@ -383,6 +349,7 @@ void UDPClass::handle_receive () {
 
             try {
                 deserialize_msg(data, in_buffer);
+                data.ref_msg_id = htons(data.ref_msg_id);
             } catch (std::string err_msg) {
                 // Output error and avoid further message processign
                 OutputClass::out_err_intern(err_msg);
@@ -402,14 +369,22 @@ void UDPClass::handle_receive () {
                 switch (data.header.type) {
                     case REPLY:
                         // Replying to unexpected message id
-                        if (data.ref_msg_id != this->replying_to_id.load(std::memory_order_relaxed))
+                        if (data.ref_msg_id != this->replying_to_id.load(std::memory_order_relaxed)) {
                             invalid_reply_id();
+                            break;
+                        }
                         // Output message
                         OutputClass::out_reply(data.result, data.message);
 
                         if (data.result == true) // Positive reply - switch to open
                             this->cur_state.store(S_OPEN, std::memory_order_relaxed);
                         else { // Negative reply -> resend auth msg
+                            // If the msg server replies to is still queue front one, confirmation havent been received yet, wait for it
+                            {
+                                std::lock_guard<std::mutex> lock(this->editing_front_mutex);
+                                if (!this->messages_to_send.empty() && data.ref_msg_id == this->messages_to_send.front().first.header.msg_id)
+                                    continue;
+                            }
                             this->auth_data.header = create_header(AUTH);
                             send_message(this->auth_data);
                         }
@@ -425,14 +400,16 @@ void UDPClass::handle_receive () {
                 switch (data.header.type) {
                     case REPLY:
                         // Replying to unexpected message id
-                        if (data.ref_msg_id != this->replying_to_id.load(std::memory_order_relaxed))
+                        if (data.ref_msg_id != this->replying_to_id.load(std::memory_order_relaxed)) {
                             invalid_reply_id();
+                            break;
+                        }
                         // Output server reply
                         OutputClass::out_reply(data.result, data.message);
                         break;
                     case MSG:
                         // Output message
-                        OutputClass::out_msg(this->display_name, data.message);
+                        OutputClass::out_msg(data.display_name, data.message);
                         break;
                     case ERR: // Output error and end
                         OutputClass::out_err_server(data.display_name, data.message);
@@ -481,14 +458,14 @@ void UDPClass::get_msg_part (const char* input, size_t& input_pos, std::string& 
 }
 
 void UDPClass::deserialize_msg (UDP_DataStruct& out_str, const char* msg) {
-    size_t msg_pos = HEADER_SIZE;
+    size_t msg_pos = sizeof(UDP_Header);
     switch (out_str.header.type) {
         case REPLY:
             // Result
             std::memcpy(&out_str.result, msg + msg_pos, sizeof(out_str.result));
             msg_pos += sizeof(out_str.result);
             // Ref msg_id
-            std::memcpy(&out_str.result, msg + msg_pos, sizeof(out_str.ref_msg_id));
+            std::memcpy(&out_str.ref_msg_id, msg + msg_pos, sizeof(out_str.ref_msg_id));
             msg_pos += sizeof(out_str.ref_msg_id);
             // Message
             get_msg_part(msg + msg_pos, msg_pos, out_str.message);
@@ -509,27 +486,45 @@ void UDPClass::deserialize_msg (UDP_DataStruct& out_str, const char* msg) {
     check_msg_valid(out_str);
 }
 /***********************************************************************************/
-std::string UDPClass::convert_to_string (UDP_DataStruct data) {
+std::string UDPClass::get_str_msg_id (uint16_t msg_id) {
+    std::string retval = "";
+    // Extract the individual bytes
+    char high_byte = static_cast<char>((msg_id >> 8) & 0xFF);
+    char low_byte = static_cast<char>(msg_id & 0xFF);
+
+    // Append the bytes to your message
+    retval += high_byte;
+    retval += low_byte;
+
+    return retval;
+}
+/***********************************************************************************/
+std::string UDPClass::convert_to_string (UDP_DataStruct& data) {
     std::string msg(1, static_cast<char>(data.header.type));
+    /*
+        todo:
+            ctrl +d crash (unsolved mystery)
+            cash messages when waiting for reply in auth state and send them afterwards
+    */
 
     switch (data.header.type) {
         case CONFIRM:
-            msg += std::string(2, data.ref_msg_id);
+            msg += get_str_msg_id(data.ref_msg_id);
             break;
         case AUTH:
-            msg += std::string(2, data.header.msg_id) + data.user_name + '\0' + data.display_name + '\0' + data.secret + '\0';
+            msg += get_str_msg_id(data.header.msg_id) + data.user_name + '\0' + data.display_name + '\0' + data.secret + '\0';
             break;
         case JOIN:
-            msg += std::string(2, data.header.msg_id) + data.channel_id + '\0' + data.display_name + '\0';
+            msg += get_str_msg_id(data.header.msg_id) + data.channel_id + '\0' + data.display_name + '\0';
             break;
         case MSG:
-            msg += std::string(2, data.header.msg_id) + data.display_name + '\0' + data.message + '\0';
+            msg += get_str_msg_id(data.header.msg_id) + data.display_name + '\0' + data.message + '\0';
             break;
         case ERR:
-            msg += std::string(2, data.header.msg_id) + data.display_name + '\0' + data.message + '\0';
+            msg += get_str_msg_id(data.header.msg_id) + data.display_name + '\0' + data.message + '\0';
             break;
         case BYE:
-            msg += std::string(2, data.header.msg_id);
+            msg += get_str_msg_id(data.header.msg_id);
             break;
         default: // Shouldn't happen as type is not user-provided
             break;
@@ -541,6 +536,6 @@ std::string UDPClass::convert_to_string (UDP_DataStruct data) {
 UDP_Header UDPClass::create_header (uint8_t type) {
     return (UDP_Header){
         .type   = type,
-        .msg_id = ++(this->msg_id)
+        .msg_id = (this->msg_id)++
     };
 }

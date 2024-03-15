@@ -12,10 +12,12 @@ enum THREAD_EVENT {
     CONFIRMATION
 };
 
+#pragma pack(push, 1)
 typedef struct {
     uint8_t type    = NO_TYPE; // 1 byte
     uint16_t msg_id = 0;       // 2 bytes
 } UDP_Header;
+#pragma pack(pop)
 
 typedef struct {
     UDP_Header header;                  // 3 bytes (msg_type + msg_id)
@@ -50,7 +52,6 @@ class UDPClass : public AbstractClass {
         struct sockaddr_in sock_str;
 
         std::mutex send_mutex;
-        std::mutex session_end_mutex;
         std::mutex editing_front_mutex;
 
         std::jthread send_thread;
@@ -66,26 +67,22 @@ class UDPClass : public AbstractClass {
         bool stop_recv;
 
         void send_message (UDP_DataStruct data);
-        void send_data (UDP_DataStruct data);
+        void send_data (UDP_DataStruct& data);
         void send_err (std::string err_msg);
         void send_confirm (uint16_t confirm_to_id);
         void session_end ();
-        void handle_send ();                              // Thread for sending data to the server
-        void handle_receive ();                           // Thread for receiving messages from server
+        void handle_send ();    // Thread for sending data to the server
+        void handle_receive (); // Thread for receiving messages from server
         /* Helper methods */
         void set_socket_timeout (uint16_t timeout);
         void deserialize_msg (UDP_DataStruct& out_str, const char* msg);
         void get_msg_part (const char* input, size_t& input_pos, std::string& store_to);
         void check_msg_valid (UDP_DataStruct& data);
         void invalid_reply_id ();
-        void thread_event (THREAD_EVENT event, uint16_t confirm_to_id = -1);
-        std::string convert_to_string (UDP_DataStruct data);
+        void thread_event (THREAD_EVENT event, uint16_t confirm_to_id = 0);
+        std::string convert_to_string (UDP_DataStruct& data);
+        std::string get_str_msg_id (uint16_t msg_id);
         UDP_Header create_header (uint8_t type);
-
-        //delete
-        void safePrint (const string& msg);
-        std::string get_msg_type (uint8_t type);
-        std::mutex print_mutex;
 
     public:
         UDPClass (std::map<std::string, std::string> data_map);
