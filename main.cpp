@@ -60,11 +60,11 @@ int main (int argc, char *argv[]) {
     std::vector<std::string> line_vec;
 
     // Set interrput signal handling - CTRL+C
-    std::signal(SIGINT, [](int sig_val){
+    std::signal(SIGINT, [](int sig_val /*not used*/){
         client->send_bye();
     });
     // Set interrput signal handling - CTRL+backslash
-    std::signal(SIGQUIT, [](int sig_val){
+    std::signal(SIGQUIT, [](int sig_val /*not used*/){
         client->send_bye();
     });
 
@@ -74,22 +74,16 @@ int main (int argc, char *argv[]) {
             if (user_line.c_str()[0] == '/') {
                 // Command - load words from user input line
                 client->get_line_words(user_line, line_vec);
-                if (line_vec.at(0) == std::string("/auth") && line_vec.size() == 4) {
+                if (line_vec.at(0) == std::string("/auth") && line_vec.size() == 4)
                     client->send_auth(line_vec.at(1), line_vec.at(3), line_vec.at(2));
-                }
-                else if (line_vec.at(0) == std::string("/join") && line_vec.size() == 2) {
+                else if (line_vec.at(0) == std::string("/join") && line_vec.size() == 2)
                     client->send_join(line_vec.at(1));
-                }
-                else if (line_vec.at(0) == std::string("/rename") && line_vec.size() == 2) {
+                else if (line_vec.at(0) == std::string("/rename") && line_vec.size() == 2)
                     client->send_rename(line_vec.at(1));
-                }
-                else if (line_vec.at(0) == std::string("/help")) {
+                else if (line_vec.at(0) == std::string("/help"))
                     OutputClass::out_help();
-                }
-                else {
-                    // Output error and continue
+                else // Output error and continue
                     OutputClass::out_err_intern("Unknown command or unsufficinet number of command params provided");
-                }
             }
             else // Msg to send
                 client->send_msg(user_line);

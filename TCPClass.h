@@ -4,6 +4,7 @@
 #include "AbstractClass.h"
 
 typedef struct {
+    uint8_t type             = NO_TYPE; // 1 byte
     bool result              = false;   // 1 byte
     std::string message      = "";      // N bytes
     std::string user_name    = "";      // N bytes
@@ -16,29 +17,46 @@ class TCPClass : public AbstractClass {
     private:
         // Transport data
         uint16_t port;
-        std::string server_hostname;
-        int socket_id;
 
-        // Inner values
+        int socket_id;
+        int retval;
+
         std::string display_name;
-        FSM_STATE cur_state;
+        std::string server_hostname;
+
+        std::atomic<FSM_STATE> cur_state;
+
+        TCP_DataStruct auth_data;
+
+        std::mutex editing_front_mutex;
+
+        std::jthread send_thread;
         std::jthread recv_thread;
+
+        bool stop_send;
         bool stop_recv;
 
         // Vector for storing words of received message
         std::vector<std::string> line_vec;
 
-        // Helper methods
-        void session_end ();
-        void set_socket_timeout (uint16_t timeout);
-        MSG_TYPE get_msg_type (std::string first_msg_word);
-        std::string convert_to_string (uint8_t type, TCP_DataStruct& data);
-        TCP_DataStruct deserialize_msg (uint8_t msg_type);
+        std::queue<TCP_DataStruct> messages_to_send;
+        std::condition_variable send_cond_var;
 
-        // Send/receive methos
-        void sendData (uint8_t type, TCP_DataStruct send_data);
-        void receive ();
-        void proces_response (uint8_t resp, TCP_DataStruct& resp_data);
+        void send_message (TCP_DataStruct& data);
+        void send_data (TCP_DataStruct& data);
+        void send_err (std::string err_msg);
+        void session_end ();
+        void handle_send ();
+        void handle_receive ();
+         /* Helper methods */
+        void set_socket_timeout ();
+        void check_msg_valid (TCP_DataStruct& data);
+        void switch_to_error (std::string err_msg);
+        void thread_event (THREAD_EVENT event);
+        MSG_TYPE get_msg_type (std::string first_msg_word);
+        std::string convert_to_string (TCP_DataStruct& data);
+        void deserialize_msg(TCP_DataStruct& out_str);
+        std::string load_rest (size_t start_from);
 
     public:
         TCPClass (std::map<std::string, std::string> data_map);
@@ -51,6 +69,6 @@ class TCPClass : public AbstractClass {
         void send_join (std::string channel_id) override;
         void send_rename (std::string new_display_name) override;
         void send_bye () override;
-};
+    };
 
 #endif // TCPCLASS_H

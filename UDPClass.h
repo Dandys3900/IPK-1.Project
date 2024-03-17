@@ -5,13 +5,6 @@
 
 #include "AbstractClass.h"
 
-// Enum for possible thread events
-enum THREAD_EVENT {
-    NO_EVENT = 0,
-    TIMEOUT,
-    CONFIRMATION
-};
-
 #pragma pack(push, 1)
 typedef struct {
     uint8_t type    = NO_TYPE; // 1 byte
@@ -51,7 +44,6 @@ class UDPClass : public AbstractClass {
         UDP_DataStruct auth_data;
         struct sockaddr_in sock_str;
 
-        std::mutex send_mutex;
         std::mutex editing_front_mutex;
 
         std::jthread send_thread;
@@ -78,7 +70,7 @@ class UDPClass : public AbstractClass {
         void deserialize_msg (UDP_DataStruct& out_str, const char* msg);
         void get_msg_part (const char* input, size_t& input_pos, std::string& store_to);
         void check_msg_valid (UDP_DataStruct& data);
-        void invalid_reply_id ();
+        void switch_to_error (std::string err_msg);
         void thread_event (THREAD_EVENT event, uint16_t confirm_to_id = 0);
         std::string convert_to_string (UDP_DataStruct& data);
         std::string get_str_msg_id (uint16_t msg_id);
@@ -95,6 +87,6 @@ class UDPClass : public AbstractClass {
         void send_join (std::string channel_id) override;
         void send_rename (std::string new_display_name) override;
         void send_bye () override;
-};
+    };
 
 #endif // UDPCLASS_H

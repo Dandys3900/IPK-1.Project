@@ -1,11 +1,13 @@
 #include "TCPClass.h"
 
-TCPClass::TCPClass (std::map<std::string, std::string> data_map)
+TCPClass::TCPClass(std::map<std::string, std::string> data_map)
     : port            (4567),
-      server_hostname (""),
       socket_id       (-1),
+      retval          (EXIT_SUCCESS),
       display_name    (""),
+      server_hostname (""),
       cur_state       (S_START),
+      stop_send       (false),
       stop_recv       (false)
 {
     std::map<std::string, std::string>::iterator iter;
@@ -18,12 +20,12 @@ TCPClass::TCPClass (std::map<std::string, std::string> data_map)
 }
 
 /***********************************************************************************/
-void TCPClass::open_connection () {
+void TCPClass::open_connection() {
     // Create TCP socket
     if ((this->socket_id = socket(AF_INET, SOCK_STREAM, 0)) <= 0)
         throw std::string("TCP socket creation failed");
 
-    struct hostent* server = gethostbyname(this->server_hostname.c_str());
+    struct hostent *server = gethostbyname(this->server_hostname.c_str());
     if (!server)
         throw std::string("Unknown or invalid hostname provided");
 
@@ -41,130 +43,195 @@ void TCPClass::open_connection () {
     // Connect to server
     if (connect(this->socket_id, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0) {
         OutputClass::out_err_intern("Error connecting to TCP server");
+        this->retval = EXIT_FAILURE;
         session_end();
     }
 
-    // Set proper timeout
-    set_socket_timeout(250); // 250ms
+    // Set rimeout for checking if server is online (1sec)
+    set_socket_timeout();
 
-    // Create thread to listen to server msgs
-    this->recv_thread = std::jthread(&TCPClass::receive, this);
+    // Create threads for sending and receiving server msgs
+    this->send_thread = std::jthread(&TCPClass::handle_send, this);
+    this->recv_thread = std::jthread(&TCPClass::handle_receive, this);
 }
 /***********************************************************************************/
-void TCPClass::session_end () {
+void TCPClass::session_end() {
+    this->stop_send = true;
+    // Notify
+    this->send_cond_var.notify_one();
     this->stop_recv = true;
     // Change state
-    cur_state = S_END;
-
+    this->cur_state.store(S_END, std::memory_order_relaxed);
+    // Clear sockets
     shutdown(this->socket_id, SHUT_RD);
     shutdown(this->socket_id, SHUT_WR);
     shutdown(this->socket_id, SHUT_RDWR);
     // Close socket
     close(this->socket_id);
     // Exit the program
-    exit(EXIT_SUCCESS);
+    exit(this->retval);
 }
 /***********************************************************************************/
-void TCPClass::set_socket_timeout (uint16_t timeout /*miliseconds*/) {
+void TCPClass::send_auth(std::string user, std::string display, std::string secret) {
+    if (this->cur_state.load(std::memory_order_relaxed) != S_START)
+        throw std::string("Can't send auth message outside of start state");
+
+    // Update display name
+    send_rename(display);
+
+    TCP_DataStruct data = {
+        .type = AUTH,
+        .user_name = user,
+        .display_name = display,
+        .secret = secret
+    };
+
+    // Move to auth state for handling reply msgs
+    this->cur_state.store(S_AUTH, std::memory_order_relaxed);
+    send_message(data);
+}
+
+void TCPClass::send_msg(std::string msg) {
+    if (this->cur_state.load(std::memory_order_relaxed) != S_OPEN)
+        throw std::string("Can't process join outside of open state");
+
+    TCP_DataStruct data = {
+        .type = MSG,
+        .message = msg,
+        .display_name = this->display_name
+    };
+    send_message(data);
+}
+
+void TCPClass::send_join(std::string channel_id) {
+    if (this->cur_state.load(std::memory_order_relaxed) != S_OPEN)
+        throw std::string("Can't process join outside of open state");
+
+    TCP_DataStruct data = {
+        .type = JOIN,
+        .display_name = this->display_name,
+        .channel_id = channel_id
+    };
+    send_message(data);
+}
+
+void TCPClass::send_rename(std::string new_display_name) {
+    if (new_display_name.length() > DISPLAY_NAME_MAX_LENGTH || !str_printable(new_display_name, false))
+        throw std::string("Invalid new value for display name");
+    // Update display name
+    this->display_name = new_display_name;
+}
+
+void TCPClass::send_bye() {
+    // Switch to end state
+    this->cur_state.store(S_END, std::memory_order_relaxed);
+    // Send bye message
+    TCP_DataStruct data = {
+        .type = BYE
+    };
+    send_message(data);
+}
+/***********************************************************************************/
+void TCPClass::send_err (std::string err_msg) {
+    // Switch to err state
+    this->cur_state.store(S_ERROR, std::memory_order_relaxed);
+
+    TCP_DataStruct data = {
+        .type = ERR,
+        .message = err_msg,
+        .display_name = this->display_name
+    };
+    send_message(data);
+}
+/***********************************************************************************/
+void TCPClass::check_msg_valid(TCP_DataStruct &data) {
+    // Each type check for:
+    // Check for allowed sizes of params
+    // Check for allowed chars used
+    switch (data.type) {
+        case AUTH:
+            if (data.user_name.length() > USERNAME_MAX_LENGTH || data.display_name.length() > DISPLAY_NAME_MAX_LENGTH || data.secret.length() > SECRET_MAX_LENGTH)
+                throw std::string("Prohibited length of param/s");
+
+            if (!str_alphanums(data.user_name) || !str_alphanums(data.secret) || !str_printable(data.display_name, false))
+                throw std::string("Prohibited chars used");
+
+            // Save auth data if resend needed
+            this->auth_data = data;
+            break;
+        case ERR:
+            // When having display_name from user side, its already checked, from server side check it now
+            if (data.display_name.length() > DISPLAY_NAME_MAX_LENGTH)
+                throw std::string("Prohibited length of param");
+
+            if (!str_printable(data.display_name, false))
+                throw std::string("Prohibited chars used");
+            break;
+        case REPLY:
+        case MSG:
+            if (data.message.length() > MESSAGE_MAX_LENGTH)
+                throw std::string("Prohibited length of param");
+
+            if (!str_printable(data.message, true))
+                throw std::string("Prohibited chars used");
+            break;
+        case JOIN:
+            if (data.channel_id.length() > CHANNEL_ID_MAX_LENGTH)
+                throw std::string("Prohibited length of param");
+
+            if (!str_alphanums(data.channel_id))
+                throw std::string("Prohibited chars used");
+            break;
+        default:
+            break;
+    }
+}
+/***********************************************************************************/
+void TCPClass::set_socket_timeout () {
     struct timeval time = {
-        .tv_sec = 0,
-        .tv_usec = suseconds_t(timeout * 1000)
+        .tv_sec = 1, // 1 second
+        .tv_usec = 0
     };
     // Set timeout for created socket
     if (setsockopt(this->socket_id, SOL_SOCKET, SO_RCVTIMEO, (char*)&(time), sizeof(struct timeval)) < 0)
-        throw ("Setting receive timeout failed");
+        throw std::string ("Setting receive timeout failed");
 }
 /***********************************************************************************/
-void TCPClass::send_auth (std::string user_name, std::string display_name, std::string secret) {
-    if (cur_state != S_START)
-        throw std::string("Can't send auth message outside of start state");
+void TCPClass::send_message(TCP_DataStruct &data) {
+    try { // Check for msg integrity
+        check_msg_valid(data);
+    } catch (std::string err_msg) {
+        // Output error and avoid further message processing
+        OutputClass::out_err_intern(err_msg);
+        return;
+    }
 
-    // Check for allowed sizes of params
-    if (user_name.length() > USERNAME_MAX_LENGTH || display_name.length() > DISPLAY_NAME_MAX_LENGTH || secret.length() > SECRET_MAX_LENGTH)
-        throw std::string("Prohibited length of param/s");
-
-    // Check for allowed chars used
-    if (!str_alphanums(user_name) || !str_alphanums(secret) || !str_printable(display_name, false))
-        throw std::string("Prohibited chars used");
-
-    // Update displayname
-    this->display_name = display_name;
-
-    // Move to auth state
-    cur_state = S_AUTH;
-    sendData(AUTH, (TCP_DataStruct){
-        .user_name = user_name,
-        .display_name = display_name,
-        .secret = secret
-    });
-}
-
-void TCPClass::send_msg (std::string msg) {
-    if (cur_state != S_OPEN)
-        throw std::string("Can't send message outside of open state");
-
-    // Check for allowed sizes of params
-    if (msg.length() > MESSAGE_MAX_LENGTH)
-        throw std::string ("Prohibited length of param/s");
-
-    // Check for allowed chars used
-    if (!str_printable(msg, true))
-        throw std::string("Prohibited chars used");
-
-    sendData(MSG, (TCP_DataStruct){
-        .message = msg,
-        .display_name = this->display_name
-    });
-}
-
-void TCPClass::send_join (std::string channel_id) {
-    if (cur_state != S_OPEN)
-        throw std::string("Can't process join outside of open state");
-
-    // Check for allowed sizes of params
-    if (channel_id.length() > CHANNEL_ID_MAX_LENGTH)
-        throw std::string ("Prohibited length of param/s");
-
-    // Check for allowed chars used
-    if (!str_alphanums(channel_id))
-        throw std::string("Prohibited chars used");
-
-    sendData(JOIN, (TCP_DataStruct){
-        .display_name = this->display_name,
-        .channel_id = channel_id
-    });
-}
-
-void TCPClass::send_rename (std::string new_display_name) {
-    if (new_display_name.length() > DISPLAY_NAME_MAX_LENGTH || !str_printable(new_display_name, false))
-        throw std::string("Prohibited length of param/s");
-    else
-        this->display_name = new_display_name;
-}
-
-void TCPClass::send_bye () {
-    // Switch to end state
-    this->cur_state = S_END;
-    // Send bye message
-    sendData(BYE, (TCP_DataStruct){});
-    session_end();
+    { // Avoid racing between main and response thread
+        std::lock_guard<std::mutex> lock(this->editing_front_mutex);
+        // Add new message to the queue
+        this->messages_to_send.push(data);
+    }
+    // Notify send thread about new message to be send
+    this->send_cond_var.notify_one();
 }
 /***********************************************************************************/
-void TCPClass::sendData (uint8_t type, TCP_DataStruct send_data) {
-    // Prepare data to sendData
-    std::string message = convert_to_string(type, send_data);
+void TCPClass::send_data(TCP_DataStruct &data) {
+    // Prepare data to send
+    std::string message = convert_to_string(data);
     const char* out_buffer = message.c_str();
 
     // Send data
-    ssize_t bytes_send = send(this->socket_id, out_buffer, strlen(out_buffer), 0);
+    ssize_t bytes_send = send(this->socket_id, out_buffer, message.size(), 0);
 
-    if (bytes_send <= 0) { // Check for errors
+    // Check for errors
+    if (bytes_send <= 0) {
         OutputClass::out_err_intern("Error while sending data to server");
+        this->retval = EXIT_FAILURE;
         session_end();
     }
 }
 /***********************************************************************************/
-MSG_TYPE TCPClass::get_msg_type (std::string first_msg_word) {
+MSG_TYPE TCPClass::get_msg_type(std::string first_msg_word) {
     if (first_msg_word == std::string("REPLY"))
         return REPLY;
     if (first_msg_word == std::string("AUTH"))
@@ -180,135 +247,206 @@ MSG_TYPE TCPClass::get_msg_type (std::string first_msg_word) {
     return NO_TYPE;
 }
 /***********************************************************************************/
-void TCPClass::receive () {
+void TCPClass::handle_send() {
+    while (this->stop_send == false) {
+        { // Mutex lock scope
+            std::unique_lock<std::mutex> lock(this->editing_front_mutex);
+            if (this->messages_to_send.empty() == false) {
+                // Stop sending if requested
+                if (this->stop_send == true)
+                    break;
+
+                // Load message to send from queue front
+                auto to_send = this->messages_to_send.front();
+
+                // Send it to server
+                send_data(to_send);
+
+                // Remove message after being sent
+                this->messages_to_send.pop();
+
+                // After sending BYE to server, close connection
+                if (to_send.type == BYE)
+                    session_end();
+            }
+        } // Mutex unlocks when getting out of scope
+    }
+}
+/***********************************************************************************/
+void TCPClass::thread_event (THREAD_EVENT event) {
+    if (event == TIMEOUT) { // Nothing is received, nothing to send -> move to end state
+        if (this->cur_state.load(std::memory_order_relaxed) == S_AUTH || this->cur_state.load(std::memory_order_relaxed) == S_ERROR)
+            send_bye();
+        // Notify waiting thread (if any)
+        this->send_cond_var.notify_one();
+    }
+}
+/***********************************************************************************/
+void TCPClass::switch_to_error (std::string err_msg) {
+    // Notify user
+    OutputClass::out_err_intern(err_msg);
+    // Notify server
+    send_err(err_msg);
+}
+/***********************************************************************************/
+void TCPClass::handle_receive () {
     char in_buffer[MAXLENGTH];
+    bool err_occured = false;
 
     while (this->stop_recv == false) {
-        ssize_t bytes_received = recv(socket_id, in_buffer, MAXLENGTH, 0);
+        ssize_t bytes_received = recv(this->socket_id, (char*)in_buffer, MAXLENGTH, 0);
 
         if (this->stop_recv == true) // Stop when requested
             break;
 
-        if (bytes_received <= 0) { // Check for errors
-            if (errno == EWOULDBLOCK || errno == EAGAIN) // Timeout, repeat loop
-                continue;
-            OutputClass::out_err_intern("Error while receiving data from server");
+        if (bytes_received < 0) {
+            if ((errno == EWOULDBLOCK || errno == EAGAIN)) // Timeout event
+                thread_event(TIMEOUT);
+            else { // Output error and end
+                OutputClass::out_err_intern(std::strerror(errno));
+                err_occured = true;
+                this->retval = EXIT_FAILURE;
+                break;
+            }
             continue;
         }
+        else if (bytes_received == 0) // No reason for processing zero response
+            continue;
 
-        in_buffer[bytes_received] = '\0';
-        std::string response(in_buffer);
+        // Store response to string
+        std::string response(in_buffer, bytes_received);
 
         // Load whole message - each msg ends with "\r\n";
         get_line_words(response.substr(0, response.find("\r\n")), this->line_vec);
 
-        TCP_DataStruct resp_data;
+        TCP_DataStruct data;
         try { // Check for valid msg_type provided
-            resp_data = deserialize_msg(get_msg_type(this->line_vec.at(0)));
+            deserialize_msg(data);
         } catch (std::string err_msg) {
+            // Output error and avoid further message processing
             OutputClass::out_err_intern(err_msg);
+            // Invalid message from server -> end connection
+            this->retval = EXIT_FAILURE;
+            send_err(err_msg);
+            send_bye();
             continue;
         }
-        // Create thread for handling the response and continue listening
-        std::jthread resp_thread = std::jthread(&TCPClass::proces_response, this, get_msg_type(this->line_vec.at(0)), std::ref(resp_data));
-    }
-}
-/***********************************************************************************/
-void TCPClass::proces_response (uint8_t resp, TCP_DataStruct& resp_data) {
-    switch (cur_state) {
-        case S_AUTH:
-            switch (resp) {
-                case REPLY:
-                    // Output message
-                    OutputClass::out_reply(resp_data.result, resp_data.message);
-                    // Change state
-                    cur_state = S_OPEN;
-                    break;
-                default: // Switch to end state
-                    cur_state = S_END;
-                    send_bye();
-                    break;
-            }
-            break;
-        case S_OPEN:
-            switch (resp) {
-                case REPLY: // Output server reply
-                    OutputClass::out_reply(resp_data.result, resp_data.message);
-                    break;
-                case MSG: // Output message
-                    OutputClass::out_msg(this->display_name, resp_data.message);
-                    break;
-                case ERR:
-                    send_bye();
-                case BYE: // Switch to end state
-                    cur_state = S_END;
-                    break;
-                default: // Switch to err state
-                    cur_state = S_ERROR;
-                    sendData(ERR, (TCP_DataStruct){
-                        .message = "Unexpected server message",
-                        .display_name = this->display_name
-                    });
-                    break;
-            }
-            break;
-        case S_ERROR: // Switch to end state
-            cur_state = S_END;
-            send_bye();
-            break;
-        case S_START:
-        case S_END: // Ignore everything
-            break;
-        default: // Not expected state, output error
-            OutputClass::out_err_intern("Unknown current state");
-    }
-}
-/***********************************************************************************/
-TCP_DataStruct TCPClass::deserialize_msg (uint8_t msg_type) {
-    TCP_DataStruct out;
 
-    switch (msg_type) {
+        // Process response
+        switch (this->cur_state.load(std::memory_order_relaxed)) {
+            case S_AUTH:
+                switch (data.type) {
+                    case REPLY:
+                        // Output message
+                        OutputClass::out_reply(data.result, data.message);
+
+                        if (data.result == true) // Positive reply - switch to open
+                            this->cur_state.store(S_OPEN, std::memory_order_relaxed);
+                        else // Negative reply -> resend auth msg
+                            send_message(this->auth_data);
+                        break;
+                    case ERR: // Output error and end
+                        OutputClass::out_err_server(data.display_name, data.message);
+                        send_bye();
+                        break;
+                    default: // Transition to error state
+                        switch_to_error("Unexpected message received");
+                        break;
+                }
+                break;
+            case S_OPEN:
+                switch (data.type) {
+                    case REPLY:
+                        // Output server reply
+                        OutputClass::out_reply(data.result, data.message);
+                        break;
+                    case MSG: // Output message
+                        OutputClass::out_msg(data.display_name, data.message);
+                        break;
+                    case ERR: // Output error and send bye
+                        OutputClass::out_err_server(data.display_name, data.message);
+                        send_bye();
+                        break;
+                    case BYE: // End connection
+                        session_end();
+                        break;
+                    default: // Transition to error state
+                        switch_to_error("Unexpected message received");
+                        break;
+                }
+                break;
+            case S_ERROR: // Switch to end state
+                this->cur_state.store(S_END, std::memory_order_relaxed);
+                send_bye();
+                break;
+            case S_START:
+            case S_END: // Ignore everything
+                break;
+            default: // Not expected state, output error
+                OutputClass::out_err_intern("Unknown current client state");
+                break;
+        }
+    }
+    // End connection when error occured during receiving
+    if (err_occured == true)
+        session_end();
+}
+/***********************************************************************************/
+std::string TCPClass::load_rest (size_t start_from) {
+    std::string out;
+    // Concatenate the rest of words as message content
+    for (size_t start_ind = start_from; start_ind < this->line_vec.size(); ++start_ind) {
+        if (start_ind != start_from)
+            out += " ";
+        out += this->line_vec.at(start_ind);
+    }
+    return out;
+}
+/***********************************************************************************/
+void TCPClass::deserialize_msg(TCP_DataStruct& out_str) {
+    out_str.type = get_msg_type(this->line_vec.at(0));
+
+    switch (out_str.type) {
         case REPLY: // REPLY OK/NOK IS {MessageContent}\r\n
-            out.result = ((this->line_vec.at(1) == std::string("OK")) ? true : false);
-            out.message = this->line_vec.at(2);
+            out_str.result = ((this->line_vec.at(1) == std::string("OK")) ? true : false);
+            out_str.message = load_rest(2);
             break;
         case MSG: // MSG FROM {DisplayName} IS {MessageContent}\r\n
-            out.display_name = this->line_vec.at(2);
-            out.message = this->line_vec.at(4);
+            out_str.display_name = this->line_vec.at(2);
+            out_str.message = load_rest(4);
             break;
         case ERR: // ERROR FROM {DisplayName} IS {MessageContent}\r\n
-            out.display_name = this->line_vec.at(2);
-            out.message = this->line_vec.at(4);
+            out_str.display_name = this->line_vec.at(2);
+            out_str.message = load_rest(4);
             break;
         default:
             throw std::string("Unknown message type provided");
             break;
     }
-    // Return deserialized message
-    return out;
+    // Check for msg integrity
+    check_msg_valid(out_str);
 }
 /***********************************************************************************/
-std::string TCPClass::convert_to_string (uint8_t type, TCP_DataStruct& data) {
+std::string TCPClass::convert_to_string(TCP_DataStruct &data) {
     std::string msg;
-
-    switch (type) {
-        case AUTH: // AUTH {Username} USING {Secret}\r\n
-            msg = "AUTH " + data.user_name + " USING " + data.secret + "\r\n";
-            break;
-        case JOIN: // JOIN {ChannelID} AS {DisplayName}\r\n
-            msg = "JOIN " + data.channel_id + " AS " + data.display_name + "\r\n";
-            break;
-        case MSG: // MSG FROM {DisplayName} IS {MessageContent}\r\n
-            msg = "MSG FROM " + data.display_name + " IS " + data.message + "\r\n";
-            break;
-        case ERR: // ERROR FROM {DisplayName} IS {MessageContent}\r\n
-            msg = "ERROR FROM " + data.display_name + " IS " + data.message + "\r\n";
-            break;
-        case BYE: // BYE\r\n
-            msg = "BYE\r\n";
-            break;
-        default: // Shouldnt happen as type is not user-provided
-            break;
+    switch (data.type) {
+    case AUTH: // AUTH {Username} AS {DisplayName} USING {Secret}\r\n
+        msg = "AUTH " + data.user_name + " AS " + data.display_name + " USING " + data.secret + "\r\n";
+        break;
+    case JOIN: // JOIN {ChannelID} AS {DisplayName}\r\n
+        msg = "JOIN " + data.channel_id + " AS " + data.display_name + "\r\n";
+        break;
+    case MSG: // MSG FROM {DisplayName} IS {MessageContent}\r\n
+        msg = "MSG FROM " + data.display_name + " IS " + data.message + "\r\n";
+        break;
+    case ERR: // ERROR FROM {DisplayName} IS {MessageContent}\r\n
+        msg = "ERROR FROM " + data.display_name + " IS " + data.message + "\r\n";
+        break;
+    case BYE: // BYE\r\n
+        msg = "BYE\r\n";
+        break;
+    default: // Shouldnt happen as type is not user-provided
+        break;
     }
     // Return composed message
     return msg;

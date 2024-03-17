@@ -56,4 +56,11 @@ enum FSM_STATE : uint8_t {
     S_END
 };
 
+// Enum for possible thread events
+enum THREAD_EVENT {
+    NO_EVENT = 0,
+    TIMEOUT,
+    CONFIRMATION
+};
+
 #endif // CONSTSFILE_H
