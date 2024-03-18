@@ -57,8 +57,6 @@ void TCPClass::open_connection() {
 /***********************************************************************************/
 void TCPClass::session_end() {
     this->stop_send = true;
-    // Notify
-    this->send_cond_var.notify_one();
     this->stop_recv = true;
     // Change state
     this->cur_state.store(S_END, std::memory_order_relaxed);
@@ -116,7 +114,7 @@ void TCPClass::send_join(std::string channel_id) {
 }
 
 void TCPClass::send_rename(std::string new_display_name) {
-    if (new_display_name.length() > DISPLAY_NAME_MAX_LENGTH || !str_printable(new_display_name, false))
+    if (regex_match(new_display_name, display_name_pattern) == false)
         throw std::string("Invalid new value for display name");
     // Update display name
     this->display_name = new_display_name;
@@ -144,49 +142,6 @@ void TCPClass::send_err (std::string err_msg) {
     send_message(data);
 }
 /***********************************************************************************/
-void TCPClass::check_msg_valid(TCP_DataStruct &data) {
-    // Each type check for:
-    // Check for allowed sizes of params
-    // Check for allowed chars used
-    switch (data.type) {
-        case AUTH:
-            if (data.user_name.length() > USERNAME_MAX_LENGTH || data.display_name.length() > DISPLAY_NAME_MAX_LENGTH || data.secret.length() > SECRET_MAX_LENGTH)
-                throw std::string("Prohibited length of param/s");
-
-            if (!str_alphanums(data.user_name) || !str_alphanums(data.secret) || !str_printable(data.display_name, false))
-                throw std::string("Prohibited chars used");
-
-            // Save auth data if resend needed
-            this->auth_data = data;
-            break;
-        case ERR:
-            // When having display_name from user side, its already checked, from server side check it now
-            if (data.display_name.length() > DISPLAY_NAME_MAX_LENGTH)
-                throw std::string("Prohibited length of param");
-
-            if (!str_printable(data.display_name, false))
-                throw std::string("Prohibited chars used");
-            break;
-        case REPLY:
-        case MSG:
-            if (data.message.length() > MESSAGE_MAX_LENGTH)
-                throw std::string("Prohibited length of param");
-
-            if (!str_printable(data.message, true))
-                throw std::string("Prohibited chars used");
-            break;
-        case JOIN:
-            if (data.channel_id.length() > CHANNEL_ID_MAX_LENGTH)
-                throw std::string("Prohibited length of param");
-
-            if (!str_alphanums(data.channel_id))
-                throw std::string("Prohibited chars used");
-            break;
-        default:
-            break;
-    }
-}
-/***********************************************************************************/
 void TCPClass::set_socket_timeout () {
     struct timeval time = {
         .tv_sec = 1, // 1 second
@@ -198,11 +153,9 @@ void TCPClass::set_socket_timeout () {
 }
 /***********************************************************************************/
 void TCPClass::send_message(TCP_DataStruct &data) {
-    try { // Check for msg integrity
-        check_msg_valid(data);
-    } catch (std::string err_msg) {
-        // Output error and avoid further message processing
-        OutputClass::out_err_intern(err_msg);
+    // Check for msg integrity
+    if (check_valid_msg<TCP_DataStruct>(data.type, data) == false) {
+        OutputClass::out_err_intern("Invalid message provided");
         return;
     }
 
@@ -211,8 +164,6 @@ void TCPClass::send_message(TCP_DataStruct &data) {
         // Add new message to the queue
         this->messages_to_send.push(data);
     }
-    // Notify send thread about new message to be send
-    this->send_cond_var.notify_one();
 }
 /***********************************************************************************/
 void TCPClass::send_data(TCP_DataStruct &data) {
@@ -277,8 +228,6 @@ void TCPClass::thread_event (THREAD_EVENT event) {
     if (event == TIMEOUT) { // Nothing is received, nothing to send -> move to end state
         if (this->cur_state.load(std::memory_order_relaxed) == S_AUTH || this->cur_state.load(std::memory_order_relaxed) == S_ERROR)
             send_bye();
-        // Notify waiting thread (if any)
-        this->send_cond_var.notify_one();
     }
 }
 /***********************************************************************************/
@@ -424,7 +373,8 @@ void TCPClass::deserialize_msg(TCP_DataStruct& out_str) {
             break;
     }
     // Check for msg integrity
-    check_msg_valid(out_str);
+    if (check_valid_msg<TCP_DataStruct>(out_str.type, out_str) == false)
+        throw std::string("Invalid message provided");
 }
 /***********************************************************************************/
 std::string TCPClass::convert_to_string(TCP_DataStruct &data) {

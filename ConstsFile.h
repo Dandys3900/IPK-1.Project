@@ -17,23 +17,13 @@
 #include <csignal>
 #include <thread>
 #include <regex>
-#include <condition_variable>
 #include <mutex>
-#include <future>
 #include <queue>
-#include <unordered_map>
 #include <atomic>
 
 #include "OutputClass.h"
 
 #define MAXLENGTH 2048
-
-#define USERNAME_MAX_LENGTH 20
-#define CHANNEL_ID_MAX_LENGTH 20
-#define SECRET_MAX_LENGTH 128
-#define DISPLAY_NAME_MAX_LENGTH 20
-#define USERNAME_MAX_LENGTH 20
-#define MESSAGE_MAX_LENGTH 1400
 
 // Enum for message types
 enum MSG_TYPE : uint8_t {

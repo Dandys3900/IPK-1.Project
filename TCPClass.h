@@ -40,7 +40,6 @@ class TCPClass : public AbstractClass {
         std::vector<std::string> line_vec;
 
         std::queue<TCP_DataStruct> messages_to_send;
-        std::condition_variable send_cond_var;
 
         void send_message (TCP_DataStruct& data);
         void send_data (TCP_DataStruct& data);
@@ -50,7 +49,6 @@ class TCPClass : public AbstractClass {
         void handle_receive ();
          /* Helper methods */
         void set_socket_timeout ();
-        void check_msg_valid (TCP_DataStruct& data);
         void switch_to_error (std::string err_msg);
         void thread_event (THREAD_EVENT event);
         MSG_TYPE get_msg_type (std::string first_msg_word);

@@ -53,7 +53,6 @@ class UDPClass : public AbstractClass {
         std::vector<uint16_t> processed_msgs;
 
         std::queue<std::pair<UDP_DataStruct, uint>> messages_to_send;
-        std::condition_variable send_cond_var;
 
         bool stop_send;
         bool stop_recv;
@@ -69,7 +68,6 @@ class UDPClass : public AbstractClass {
         void set_socket_timeout (uint16_t timeout);
         void deserialize_msg (UDP_DataStruct& out_str, const char* msg);
         void get_msg_part (const char* input, size_t& input_pos, std::string& store_to);
-        void check_msg_valid (UDP_DataStruct& data);
         void switch_to_error (std::string err_msg);
         void thread_event (THREAD_EVENT event, uint16_t confirm_to_id = 0);
         std::string convert_to_string (UDP_DataStruct& data);

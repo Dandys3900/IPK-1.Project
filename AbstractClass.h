@@ -3,6 +3,13 @@
 
 #include "ConstsFile.h"
 
+// Regex patterns for message values check
+const regex username_pattern     ("[A-z0-9-]{1,20}");
+const regex channel_id_pattern   ("[A-z0-9-.]{1,20}");
+const regex secret_pattern       ("[A-z0-9-]{1,128}");
+const regex display_name_pattern ("[\x21-\x7E]{1,20}");
+const regex message_pattern      ("[\x20-\x7E]{1,1400}");
+
 class AbstractClass {
     public:
         virtual void open_connection() = 0;
@@ -20,18 +27,33 @@ class AbstractClass {
             std::stringstream ss(line);
             std::string line_word;
 
+            // Insert each word to vector
             while (ss >> line_word)
                 words_vec.push_back(line_word);
         }
 
-        bool str_alphanums (std::string input) {
-            const regex pattern("[a-zA-Z0-9-.]+");
-            return regex_match(input, pattern);
-        }
-
-        bool str_printable (std::string input, bool incl_space) {
-            const regex pattern((incl_space) ? "[ -~]+" : "[!-~]+");
-            return regex_match(input, pattern);
+        template <typename strType>
+        bool check_valid_msg (uint8_t type, strType& data) {
+            switch (type) {
+                case AUTH:
+                    return regex_match(data.user_name, username_pattern) &&
+                           regex_match(data.display_name, display_name_pattern) &&
+                           regex_match(data.secret, secret_pattern);
+                case ERR:
+                case MSG:
+                    return regex_match(data.display_name, display_name_pattern) &&
+                           regex_match(data.message, message_pattern);
+                case REPLY:
+                    return regex_match(data.message, message_pattern);
+                case JOIN:
+                    return regex_match(data.channel_id, channel_id_pattern) &&
+                           regex_match(data.display_name, display_name_pattern);
+                case BYE:
+                case CONFIRM:
+                    return true;
+                default: // Unexpected state, shouldnt happen
+                    return false;
+            }
         }
 
         virtual ~AbstractClass () {}
