@@ -1,19 +1,11 @@
 #include "UDPClass.h"
 
 UDPClass::UDPClass (std::map<std::string, std::string> data_map)
-    : msg_id           (0),
-      port             (4567),
+    : ClientClass      (),
+      msg_id           (0),
       recon_attempts   (3),
       timeout          (250),
-      socket_id        (-1),
-      retval           (EXIT_SUCCESS),
-      server_hostname  (""),
-      display_name     (""),
-      cur_state        (S_START),
-      replying_to_id   (0),
-      latest_sent_id   (1), // Initially must be different from msg_id (0)
-      stop_send        (false),
-      stop_recv        (false)
+      latest_sent_id   (1) // Initially must be different from msg_id (0)
 {
     std::map<std::string, std::string>::iterator iter;
     // Look for init values in map to override init values
@@ -28,16 +20,18 @@ UDPClass::UDPClass (std::map<std::string, std::string> data_map)
 
     if ((iter = data_map.find("timeout")) != data_map.end())
         this->timeout = static_cast<uint16_t>(std::stoi(iter->second));
+
+    this->display_name = "pokus";
 }
 /***********************************************************************************/
 void UDPClass::open_connection () {
     // Create UDP socket
     if ((this->socket_id = socket(AF_INET, SOCK_DGRAM, 0)) <= 0)
-        throw std::string("UDP socket creation failed");
+        throw std::logic_error("UDP socket creation failed");
 
     struct hostent* server = gethostbyname(this->server_hostname.c_str());
     if (!server)
-        throw std::string("Unknown or invalid hostname provided");
+        throw std::logic_error("Unknown or invalid hostname provided");
 
     // Setup server details
     struct sockaddr_in server_addr;
@@ -61,23 +55,23 @@ void UDPClass::open_connection () {
 }
 /***********************************************************************************/
 void UDPClass::session_end () {
-    this->stop_send = true;
-    // Notify
     this->stop_recv = true;
+    this->stop_send = true;
+    // Notify send thread
+    this->send_cond_var.notify_one();
     // Change state
-    this->cur_state.store(S_END, std::memory_order_relaxed);
+    this->cur_state = S_END;
     // Close socket
     close(this->socket_id);
-    // Exit the program
-    exit(this->retval);
+    // Exit the program by notifying main function
+    this->end_program = true;
+    this->cond_var.notify_one();
 }
 /***********************************************************************************/
 void UDPClass::send_auth (std::string user, std::string display, std::string secret) {
-    if (this->cur_state.load(std::memory_order_relaxed) != S_START)
-        throw std::string("Can't send auth message outside of start state");
-
     // Update display name
-    send_rename(display);
+    if (send_rename(display) == false)
+        return;
 
     UDP_DataStruct data = {
         .header = create_header(AUTH),
@@ -85,16 +79,10 @@ void UDPClass::send_auth (std::string user, std::string display, std::string sec
         .display_name = display,
         .secret = secret
     };
-
-    // Move to auth state for handling reply msgs
-    this->cur_state.store(S_AUTH, std::memory_order_relaxed);
     send_message(data);
 }
 /***********************************************************************************/
 void UDPClass::send_msg (std::string msg) {
-    if (this->cur_state.load(std::memory_order_relaxed) != S_OPEN)
-        throw std::string("Can't send message outside of open state");
-
     UDP_DataStruct data = {
         .header = create_header(MSG),
         .message = msg,
@@ -104,9 +92,6 @@ void UDPClass::send_msg (std::string msg) {
 }
 /***********************************************************************************/
 void UDPClass::send_join (std::string channel_id) {
-    if (this->cur_state.load(std::memory_order_relaxed) != S_OPEN)
-        throw std::string("Can't process join outside of open state");
-
     UDP_DataStruct data = {
         .header = create_header(JOIN),
         .display_name = this->display_name,
@@ -115,11 +100,14 @@ void UDPClass::send_join (std::string channel_id) {
     send_message(data);
 }
 /***********************************************************************************/
-void UDPClass::send_rename (std::string new_display_name) {
-    if (regex_match(new_display_name, display_name_pattern) == false)
-        throw std::string("Invalid new value for display name");
+bool UDPClass::send_rename (std::string new_display_name) {
+    if (regex_match(new_display_name, display_name_pattern) == false) {
+        OutputClass::out_err_intern("Invalid new value for display name");
+        return false;
+    }
     // Update display name
     this->display_name = new_display_name;
+    return true;
 }
 /***********************************************************************************/
 void UDPClass::send_confirm (uint16_t confirm_to_id) {
@@ -127,12 +115,11 @@ void UDPClass::send_confirm (uint16_t confirm_to_id) {
         .header = create_header(CONFIRM),
         .ref_msg_id = confirm_to_id
     };
-    send_message(data);
+    // Send confirm immediately
+    send_data(data);
 }
 /***********************************************************************************/
 void UDPClass::send_bye () {
-    // Switch to end state
-    this->cur_state.store(S_END, std::memory_order_relaxed);
     // Send bye message
     UDP_DataStruct data = {
         .header = create_header(BYE)
@@ -140,9 +127,16 @@ void UDPClass::send_bye () {
     send_message(data);
 }
 /***********************************************************************************/
+void UDPClass::send_priority_bye () {
+    this->high_priority = true;
+    // Switch to END state
+    this->cur_state = S_END;
+    send_bye();
+}
+/***********************************************************************************/
 void UDPClass::send_err (std::string err_msg) {
     // Switch to err state
-    this->cur_state.store(S_ERROR, std::memory_order_relaxed);
+    this->cur_state = S_ERROR;
 
     UDP_DataStruct data = {
         .header = create_header(ERR),
@@ -159,114 +153,149 @@ void UDPClass::set_socket_timeout (uint16_t timeout /*miliseconds*/) {
     };
     // Set timeout for created socket
     if (setsockopt(this->socket_id, SOL_SOCKET, SO_RCVTIMEO, (char*)&(time), sizeof(struct timeval)) < 0)
-        throw std::string ("Setting receive timeout failed");
+        throw std::logic_error("Setting receive timeout failed");
 }
 /***********************************************************************************/
 void UDPClass::send_message (UDP_DataStruct data) {
-    // Check for msg integrity
+    // Check for message validity
     if (check_valid_msg<UDP_DataStruct>(data.header.type, data) == false) {
-        OutputClass::out_err_intern("Invalid message for sending");
+        OutputClass::out_err_intern("Invalid content of message provided, wont send");
         return;
     }
 
-    {   // Avoid racing between main and response thread
+    std::cout << "ADDING MSG TO QUEUE: " << std::to_string(data.header.type) << std::endl;
+
+    // Avoid racing between main and response thread
+    {
         std::lock_guard<std::mutex> lock(this->editing_front_mutex);
-        // Add new message to the queue with given resend count
-        this->messages_to_send.push({data, this->recon_attempts});
+        if (this->high_priority == true) {
+            this->high_priority = false;
+            // Erase the queue and place there the BYE msg
+            this->messages_to_send = {};
+            this->messages_to_send.push({data, this->recon_attempts});
+        }
+        else // Add new message to the queue with given resend count
+            this->messages_to_send.push({data, this->recon_attempts});
     }
 }
 /***********************************************************************************/
 void UDPClass::send_data (UDP_DataStruct& data) {
     // Store msg_id to avoid multiple sends of the same msg in handle_send
-    this->latest_sent_id.store(data.header.msg_id, std::memory_order_relaxed);
+    this->latest_sent_id = data.header.msg_id;
 
     // Prepare data to send
     std::string message = convert_to_string(data);
     const char* out_buffer = message.data();
+
+    std::cout << "SENDING MSG: " << std::to_string(data.header.type) << std::endl;
 
     // Send data
     ssize_t bytes_send =
         sendto(this->socket_id, out_buffer, message.size(), 0, (struct sockaddr*)&(this->sock_str), sizeof(this->sock_str));
 
     // Check for errors
-    if (bytes_send <= 0) {
+    if (bytes_send < 0)
         OutputClass::out_err_intern("Error while sending data to server");
-        this->retval = EXIT_FAILURE;
-        session_end();
-    }
 }
 /***********************************************************************************/
 void UDPClass::handle_send () {
     while (this->stop_send == false) {
-        {
-            std::unique_lock<std::mutex> lock(this->editing_front_mutex);
-            if (this->messages_to_send.empty() == false) {
-                // Stop sending if requested
-                if (this->stop_send == true)
-                    break;
+        std::unique_lock<std::mutex> sendlock(this->send_mutex);
+        this->send_cond_var.wait(sendlock, [&] { return (!this->messages_to_send.empty() || this->stop_send); });
 
-                // Load message to send from queue front
-                auto to_send = this->messages_to_send.front();
+        // Avoid racing when reading from queue
+        std::unique_lock<std::mutex> lock(this->editing_front_mutex);
 
-                // Avoid sending multiple msgs with the same msg_id
-                if (to_send.first.header.msg_id != this->latest_sent_id.load(std::memory_order_relaxed)) {
-                    // Send it to server
-                    send_data(to_send.first);
+        if (this->messages_to_send.empty() == true || this->cur_state == S_AUTH_CONFD)
+            continue;
 
-                    // Confirm message wont be confirmed by server so remove after being sent
-                    if (to_send.first.header.type == CONFIRM)
-                        this->messages_to_send.pop();
-                    else // Store its id to check for matching reply ref_msg_id from server
-                        this->replying_to_id.store(to_send.first.header.msg_id, std::memory_order_relaxed);
-                }
+        // Stop sending if requested
+        if (this->stop_send == true)
+            break;
+
+        // Load message to send from queue front
+        auto to_send = this->messages_to_send.front();
+
+        // Avoid sending multiple msgs with the same msg_id
+        if (to_send.first.header.msg_id != this->latest_sent_id) {
+            // Check if given message can be send in client's current state
+            if (check_msg_context(to_send.first.header.type, this->cur_state) == false) {
+                OutputClass::out_err_intern("Sending this type of message is prohibited for current client state");
+                // Remove this message from queue
+                this->messages_to_send.pop();
+                continue;
             }
-        } // Mutex unlocks when getting out of scope
+
+            // Send it to server
+            send_data(to_send.first);
+
+            // Store its id to check for matching reply ref_msg_id from server
+            this->to_reply_ids.push_back(to_send.first.header.msg_id);
+        }
     }
 }
 /***********************************************************************************/
 void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
     bool no_server_response = false;
+    // Timeout happened when waiting for REPLY in confirmed AUTH state -> end connection
+    if (event == TIMEOUT && this->cur_state == S_AUTH_CONFD)
+        no_server_response = true;
+
     {
         std::lock_guard<std::mutex> lock(this->editing_front_mutex);
-        if (this->messages_to_send.empty() == false) {
+        if (this->messages_to_send.empty() == false && no_server_response == false) {
             // Skip if messages queue is empty as nothing to deal with
             auto& front_msg = this->messages_to_send.front();
-            if (event == TIMEOUT) { // Timeout event occured
+
+            // There is/are msgs in queue, but not send yet, ignore and avoid their resend count decrement
+            if (front_msg.first.header.msg_id != this->latest_sent_id) {}
+            else if (event == TIMEOUT) { // Timeout event occured
+                std::cout << "TIMEOUT EVENT" << std::endl;
                 // Decrease front msg resend count
                 if (front_msg.second > 1) {
                     // Decrease resend count
                     front_msg.second -= 1;
                     // Ensure msg_id uniqueness by changing it each time
                     front_msg.first.header = create_header(front_msg.first.header.type);
-                    this->replying_to_id.store(front_msg.first.header.msg_id, std::memory_order_relaxed);
                 }
                 else { // Pop it from queue and continue with another message (if any)
-                    this->messages_to_send.pop();
                     // BYE msg to server timeouted -> end connection
                     if (front_msg.first.header.type == BYE)
                         session_end();
+                    else {
+                        // Remove message as lost in transmit
+                        this->messages_to_send.pop();
+                        // No response from server, send BYE and move to END state
+                        if (this->cur_state == S_AUTH || this->cur_state == S_ERROR)
+                            no_server_response = true;
+                    }
                 }
             }
             else if (event == CONFIRMATION) { // Confirmation event occured
                 if (front_msg.first.header.msg_id == confirm_to_id) { // Pop it from queue and continue with another message (if any)
-                    this->messages_to_send.pop();
                     // Confirmed BYE msg -> end connection
+                    std::cout << "MESSAGE CONFIRMED" << std::endl;
                     if (front_msg.first.header.type == BYE)
                         session_end();
+                    else {
+                        if (front_msg.first.header.type == AUTH) {
+                            this->cur_state = S_AUTH_CONFD;
+                            this->messages_to_send.pop();
+                            return;
+                        }
+                        this->messages_to_send.pop();
+                    }
                 }
                 else
                     OutputClass::out_err_intern("Confirmation to unexpected message received");
             }
         }
-        // Nothing is received, nothing to send
-        if (event == TIMEOUT && this->messages_to_send.empty() == true) {
-            if (this->cur_state.load(std::memory_order_relaxed) == S_AUTH || this->cur_state.load(std::memory_order_relaxed) == S_ERROR)
-                no_server_response = true;
-        }
-
     }
+    // Corresponds to the FMS when going from AUTH/ERROR -> BYE, the "_/BYE" option
     if (no_server_response)
-        send_bye();
+        send_priority_bye();
+    // Notify waiting thread (if any)
+    this->send_cond_var.notify_one();
 }
 /***********************************************************************************/
 void UDPClass::handle_receive () {
@@ -281,20 +310,27 @@ void UDPClass::handle_receive () {
         if (this->stop_recv == true)
             break;
 
-        if (bytes_received < 0) {
+        if (bytes_received < 3) { // Smaller then compulsory header size (3B)
             if ((errno == EWOULDBLOCK || errno == EAGAIN)) // Timeout event
                 thread_event(TIMEOUT);
-            else // Output error
-                OutputClass::out_err_intern(std::strerror(errno));
+            else if (bytes_received < 0) // Output error
+                OutputClass::out_err_intern("Error while receiving data from server");
+            else { // 0 <= size < 3 -> send ERR, BYE and end connection
+                std::string err_msg = "Unsufficient lenght of message received";
+                OutputClass::out_err_intern(err_msg);
+                // Invalid message from server -> end connection
+                send_err(err_msg);
+                send_priority_bye();
+            }
+            // No reason for processing unsufficient-size response, repeat
             continue;
         }
-        else if (bytes_received == 0) // No reason for processing zero response
-            continue;
 
         // Store received data
         UDP_DataStruct data;
         // Load message header
         std::memcpy(&data.header, in_buffer, sizeof(UDP_Header));
+        // Convert msg_id to correct indian
         data.header.msg_id = htons(data.header.msg_id);
 
         if (data.header.type == CONFIRM) { // Confirmation from server event
@@ -313,48 +349,42 @@ void UDPClass::handle_receive () {
         processed_msgs.push_back(data.header.msg_id);
 
         try {
-            deserialize_msg(data, in_buffer);
-            data.ref_msg_id = htons(data.ref_msg_id);
-        } catch (std::string err_msg) {
+            deserialize_msg(data, in_buffer, bytes_received);
+        } catch (const std::logic_error& e) {
             // Output error and avoid further message processing
-            OutputClass::out_err_intern(err_msg);
+            OutputClass::out_err_intern(e.what());
             // Invalid message from server -> end connection
-            this->retval = EXIT_FAILURE;
-            send_err(err_msg);
-            send_bye();
+            send_err(e.what());
+            send_priority_bye();
             continue;
         }
 
         // Process response
-        switch (this->cur_state.load(std::memory_order_relaxed)) {
-            case S_AUTH:
+        switch (this->cur_state) {
+            case S_AUTH: // AUTH not confirmed yet, continue
+                continue;
+            case S_AUTH_CONFD:
                 switch (data.header.type) {
                     case REPLY:
                         // Replying to unexpected message id
-                        if (data.ref_msg_id != this->replying_to_id.load(std::memory_order_relaxed)) {
+                        if ((std::find(to_reply_ids.begin(), to_reply_ids.end(), data.ref_msg_id)) == to_reply_ids.end()) {
                             switch_to_error("Reply message has invalid ref_id");
                             // End session
-                            session_end();
+                            send_priority_bye();
                             break;
                         }
                         // Output message
                         OutputClass::out_reply(data.result, data.message);
 
                         if (data.result == true) // Positive reply - switch to open
-                            this->cur_state.store(S_OPEN, std::memory_order_relaxed);
-                        else { // Negative reply -> resend auth msg
-                            { // If the message is still at queue front, it hasnt been confirmed by server yet, skip
-                                std::lock_guard<std::mutex> lock(this->editing_front_mutex);
-                                if (this->messages_to_send.empty() == false && data.ref_msg_id == this->messages_to_send.front().first.header.msg_id)
-                                    continue;
-                            }
-                            this->auth_data.header = create_header(AUTH);
-                            send_message(this->auth_data);
-                        }
+                            this->cur_state = S_OPEN;
+
+                        this->send_cond_var.notify_one();
+                        // Negative reply -> stay in AUTH state and allow user to re-authenticate
                         break;
                     case ERR: // Output error and end
                         OutputClass::out_err_server(data.display_name, data.message);
-                        send_bye();
+                        send_priority_bye();
                         break;
                     default: // Transition to error state
                         switch_to_error("Unexpected message received");
@@ -365,10 +395,10 @@ void UDPClass::handle_receive () {
                 switch (data.header.type) {
                     case REPLY:
                         // Replying to unexpected message id
-                        if (data.ref_msg_id != this->replying_to_id.load(std::memory_order_relaxed)) {
+                        if ((std::find(to_reply_ids.begin(), to_reply_ids.end(), data.ref_msg_id)) == to_reply_ids.end()) {
                             switch_to_error("Reply message has invalid ref_id");
                             // End session
-                            session_end();
+                            send_priority_bye();
                             break;
                         }
                         // Output server reply
@@ -379,19 +409,19 @@ void UDPClass::handle_receive () {
                         break;
                     case ERR: // Output error and send bye
                         OutputClass::out_err_server(data.display_name, data.message);
-                        send_bye();
+                        send_priority_bye();
                         break;
                     case BYE: // End connection
                         session_end();
-                        break;
+                        return;
                     default: // Transition to error state
                         switch_to_error("Unexpected message received");
                         break;
                 }
                 break;
             case S_ERROR: // Switch to end state
-                this->cur_state.store(S_END, std::memory_order_relaxed);
-                send_bye();
+                this->cur_state = S_END;
+                send_priority_bye();
                 break;
             case S_START:
             case S_END: // Ignore everything
@@ -410,17 +440,20 @@ void UDPClass::switch_to_error (std::string err_msg) {
     send_err(err_msg);
 }
 /***********************************************************************************/
-void UDPClass::get_msg_part (const char* input, size_t& input_pos, std::string& store_to) {
-    for (size_t pos = 0; input[pos] != '\0'; ++pos, ++input_pos)
+void UDPClass::get_msg_part (const char* input, size_t& input_pos, size_t max_size, std::string& store_to) {
+    for (size_t pos = 0; pos < max_size && input[pos] != '\0'; ++pos, ++input_pos)
         store_to += input[pos];
     // Skip currently found null byte
     ++input_pos;
 }
 
-void UDPClass::deserialize_msg (UDP_DataStruct& out_str, const char* msg) {
+void UDPClass::deserialize_msg (UDP_DataStruct& out_str, const char* msg, size_t total_size) {
+    std::cout << "DESERIALIZING MSG " << std::to_string(out_str.header.type) << std::endl;
     size_t msg_pos = sizeof(UDP_Header);
     switch (out_str.header.type) {
         case REPLY:
+            if (total_size < 6) // Not enough for loading compulsory result (1B) + ref_msg_id (2B)
+                throw std::logic_error("Unsufficient lenght of REPLY message received");
             // Result
             std::memcpy(&out_str.result, msg + msg_pos, sizeof(out_str.result));
             msg_pos += sizeof(out_str.result);
@@ -428,23 +461,26 @@ void UDPClass::deserialize_msg (UDP_DataStruct& out_str, const char* msg) {
             std::memcpy(&out_str.ref_msg_id, msg + msg_pos, sizeof(out_str.ref_msg_id));
             msg_pos += sizeof(out_str.ref_msg_id);
             // Message
-            get_msg_part(msg + msg_pos, msg_pos, out_str.message);
+            get_msg_part(msg + msg_pos, msg_pos, (total_size - msg_pos), out_str.message);
             break;
         case ERR:
         case MSG:
             // Display name
-            get_msg_part(msg + msg_pos, msg_pos, out_str.display_name);
+            get_msg_part(msg + msg_pos, msg_pos, (total_size - msg_pos), out_str.display_name);
             // Message
-            get_msg_part(msg + msg_pos, msg_pos, out_str.message);
+            get_msg_part(msg + msg_pos, msg_pos, (total_size - msg_pos), out_str.message);
             break;
         case BYE:
             break;
         default:
-            throw std::string("Unknown message type provided");
+            throw std::logic_error("Unknown message type provided");
     }
     // Check for msg integrity
     if (check_valid_msg<UDP_DataStruct>(out_str.header.type, out_str) == false)
-        throw std::string("Invalid message provided");
+        throw std::logic_error("Invalid message provided");
+
+    // Convert ref_msg_id to correct indian
+    out_str.ref_msg_id = htons(out_str.ref_msg_id);
 }
 /***********************************************************************************/
 std::string UDPClass::get_str_msg_id (uint16_t msg_id) {
@@ -456,7 +492,7 @@ std::string UDPClass::get_str_msg_id (uint16_t msg_id) {
     // Append the bytes
     retval += high_byte;
     retval += low_byte;
-
+    // Return constructed string holding correct value of msg_id
     return retval;
 }
 /***********************************************************************************/
@@ -464,11 +500,7 @@ std::string UDPClass::convert_to_string (UDP_DataStruct& data) {
     std::string msg(1, static_cast<char>(data.header.type));
     /*
         todo:
-            ctrl +d crash (unsolved mystery)
-            cash messages when waiting for reply in auth state and send them afterwards (meaning probably allow adding all messages to queue and check if allowed to send just before send_data())
-            (the end state, not ending session when going to it?)
-            get back to main after session end to clear memory
-            (should we check if received message contains all necessary parts?)
+            sledovat pocty bye poslanych pro ruzne cases
     */
     switch (data.header.type) {
         case CONFIRM:

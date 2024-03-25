@@ -20,6 +20,9 @@
 #include <mutex>
 #include <queue>
 #include <atomic>
+#include <stdexcept>
+#include <condition_variable>
+#include <poll.h>
 
 #include "OutputClass.h"
 
@@ -41,6 +44,7 @@ enum MSG_TYPE : uint8_t {
 enum FSM_STATE : uint8_t {
     S_START = 0,
     S_AUTH,
+    S_AUTH_CONFD,
     S_OPEN,
     S_ERROR,
     S_END

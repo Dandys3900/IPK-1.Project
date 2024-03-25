@@ -1,7 +1,7 @@
 #ifndef TCPCLASS_H
 #define TCPCLASS_H
 
-#include "AbstractClass.h"
+#include "ClientClass.h"
 
 typedef struct {
     uint8_t type             = NO_TYPE; // 1 byte
@@ -13,28 +13,9 @@ typedef struct {
     std::string channel_id   = "";      // N bytes
 } TCP_DataStruct;
 
-class TCPClass : public AbstractClass {
+class TCPClass : public ClientClass {
     private:
-        // Transport data
-        uint16_t port;
-
-        int socket_id;
-        int retval;
-
-        std::string display_name;
-        std::string server_hostname;
-
-        std::atomic<FSM_STATE> cur_state;
-
-        TCP_DataStruct auth_data;
-
-        std::mutex editing_front_mutex;
-
-        std::jthread send_thread;
-        std::jthread recv_thread;
-
-        bool stop_send;
-        bool stop_recv;
+        bool allow_another_send;
 
         // Vector for storing words of received message
         std::vector<std::string> line_vec;
@@ -44,7 +25,6 @@ class TCPClass : public AbstractClass {
         void send_message (TCP_DataStruct& data);
         void send_data (TCP_DataStruct& data);
         void send_err (std::string err_msg);
-        void session_end ();
         void handle_send ();
         void handle_receive ();
          /* Helper methods */
@@ -65,8 +45,10 @@ class TCPClass : public AbstractClass {
         void send_auth (std::string user_name, std::string display_name, std::string secret) override;
         void send_msg (std::string msg) override;
         void send_join (std::string channel_id) override;
-        void send_rename (std::string new_display_name) override;
         void send_bye () override;
+        void send_priority_bye () override;
+        void session_end () override;
+        bool send_rename (std::string new_display_name) override;
     };
 
 #endif // TCPCLASS_H

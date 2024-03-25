@@ -1,14 +1,8 @@
 #include "TCPClass.h"
 
 TCPClass::TCPClass(std::map<std::string, std::string> data_map)
-    : port            (4567),
-      socket_id       (-1),
-      retval          (EXIT_SUCCESS),
-      display_name    (""),
-      server_hostname (""),
-      cur_state       (S_START),
-      stop_send       (false),
-      stop_recv       (false)
+    : ClientClass        (),
+      allow_another_send (true)
 {
     std::map<std::string, std::string>::iterator iter;
     // Look for init values in map to override init values
@@ -18,16 +12,15 @@ TCPClass::TCPClass(std::map<std::string, std::string> data_map)
     if ((iter = data_map.find("port")) != data_map.end())
         this->port = static_cast<uint16_t>(std::stoi(iter->second));
 }
-
 /***********************************************************************************/
 void TCPClass::open_connection() {
     // Create TCP socket
     if ((this->socket_id = socket(AF_INET, SOCK_STREAM, 0)) <= 0)
-        throw std::string("TCP socket creation failed");
+        throw std::logic_error("TCP socket creation failed");
 
     struct hostent *server = gethostbyname(this->server_hostname.c_str());
     if (!server)
-        throw std::string("Unknown or invalid hostname provided");
+        throw std::logic_error("Unknown or invalid hostname provided");
 
     // Setup server details
     struct sockaddr_in server_addr;
@@ -41,14 +34,11 @@ void TCPClass::open_connection() {
     memcpy(&server_addr.sin_addr.s_addr, server->h_addr, server->h_length);
 
     // Connect to server
-    if (connect(this->socket_id, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0) {
-        OutputClass::out_err_intern("Error connecting to TCP server");
-        this->retval = EXIT_FAILURE;
-        session_end();
-    }
+    if (connect(this->socket_id, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0)
+        throw std::logic_error("Error connecting to TCP server");
 
-    // Set rimeout for checking if server is online (1sec)
-    set_socket_timeout();
+    // Set rimeout for checking if server is online
+    set_socket_timeout(/*1sec*/);
 
     // Create threads for sending and receiving server msgs
     this->send_thread = std::jthread(&TCPClass::handle_send, this);
@@ -59,23 +49,22 @@ void TCPClass::session_end() {
     this->stop_send = true;
     this->stop_recv = true;
     // Change state
-    this->cur_state.store(S_END, std::memory_order_relaxed);
+    this->cur_state = S_END;
     // Clear sockets
     shutdown(this->socket_id, SHUT_RD);
     shutdown(this->socket_id, SHUT_WR);
     shutdown(this->socket_id, SHUT_RDWR);
     // Close socket
     close(this->socket_id);
-    // Exit the program
-    exit(this->retval);
+    // Exit the program by notifying main function
+    this->end_program = true;
+    this->cond_var.notify_one();
 }
 /***********************************************************************************/
 void TCPClass::send_auth(std::string user, std::string display, std::string secret) {
-    if (this->cur_state.load(std::memory_order_relaxed) != S_START)
-        throw std::string("Can't send auth message outside of start state");
-
     // Update display name
-    send_rename(display);
+    if (send_rename(display) == false)
+        return;
 
     TCP_DataStruct data = {
         .type = AUTH,
@@ -83,16 +72,10 @@ void TCPClass::send_auth(std::string user, std::string display, std::string secr
         .display_name = display,
         .secret = secret
     };
-
-    // Move to auth state for handling reply msgs
-    this->cur_state.store(S_AUTH, std::memory_order_relaxed);
     send_message(data);
 }
 
 void TCPClass::send_msg(std::string msg) {
-    if (this->cur_state.load(std::memory_order_relaxed) != S_OPEN)
-        throw std::string("Can't process join outside of open state");
-
     TCP_DataStruct data = {
         .type = MSG,
         .message = msg,
@@ -102,9 +85,6 @@ void TCPClass::send_msg(std::string msg) {
 }
 
 void TCPClass::send_join(std::string channel_id) {
-    if (this->cur_state.load(std::memory_order_relaxed) != S_OPEN)
-        throw std::string("Can't process join outside of open state");
-
     TCP_DataStruct data = {
         .type = JOIN,
         .display_name = this->display_name,
@@ -113,16 +93,17 @@ void TCPClass::send_join(std::string channel_id) {
     send_message(data);
 }
 
-void TCPClass::send_rename(std::string new_display_name) {
-    if (regex_match(new_display_name, display_name_pattern) == false)
-        throw std::string("Invalid new value for display name");
+bool TCPClass::send_rename(std::string new_display_name) {
+    if (regex_match(new_display_name, display_name_pattern) == false) {
+        OutputClass::out_err_intern("Invalid new value for display name");
+        return false;
+    }
     // Update display name
     this->display_name = new_display_name;
+    return true;
 }
 
 void TCPClass::send_bye() {
-    // Switch to end state
-    this->cur_state.store(S_END, std::memory_order_relaxed);
     // Send bye message
     TCP_DataStruct data = {
         .type = BYE
@@ -130,9 +111,16 @@ void TCPClass::send_bye() {
     send_message(data);
 }
 /***********************************************************************************/
+void TCPClass::send_priority_bye () {
+    this->high_priority = true;
+    // Switch to end state
+    this->cur_state = S_END;
+    send_bye();
+}
+/***********************************************************************************/
 void TCPClass::send_err (std::string err_msg) {
     // Switch to err state
-    this->cur_state.store(S_ERROR, std::memory_order_relaxed);
+    this->cur_state = S_ERROR;
 
     TCP_DataStruct data = {
         .type = ERR,
@@ -149,21 +137,26 @@ void TCPClass::set_socket_timeout () {
     };
     // Set timeout for created socket
     if (setsockopt(this->socket_id, SOL_SOCKET, SO_RCVTIMEO, (char*)&(time), sizeof(struct timeval)) < 0)
-        throw std::string ("Setting receive timeout failed");
+        throw std::logic_error("Setting receive timeout failed");
 }
 /***********************************************************************************/
 void TCPClass::send_message(TCP_DataStruct &data) {
-    // Check for msg integrity
+    // Check for message validity
     if (check_valid_msg<TCP_DataStruct>(data.type, data) == false) {
-        OutputClass::out_err_intern("Invalid message provided");
+        OutputClass::out_err_intern("Invalid content of message provided, wont send");
         return;
     }
 
-    { // Avoid racing between main and response thread
-        std::lock_guard<std::mutex> lock(this->editing_front_mutex);
-        // Add new message to the queue
+    // Avoid racing between main and response thread
+    std::lock_guard<std::mutex> lock(this->editing_front_mutex);
+    if (this->high_priority == true) {
+        this->high_priority = false;
+        // Erase the queue and place there the BYE msg
+        this->messages_to_send = {};
         this->messages_to_send.push(data);
     }
+    else // Add new message to the queue with given resend count
+        this->messages_to_send.push(data);
 }
 /***********************************************************************************/
 void TCPClass::send_data(TCP_DataStruct &data) {
@@ -175,11 +168,8 @@ void TCPClass::send_data(TCP_DataStruct &data) {
     ssize_t bytes_send = send(this->socket_id, out_buffer, message.size(), 0);
 
     // Check for errors
-    if (bytes_send <= 0) {
+    if (bytes_send < 0)
         OutputClass::out_err_intern("Error while sending data to server");
-        this->retval = EXIT_FAILURE;
-        session_end();
-    }
 }
 /***********************************************************************************/
 MSG_TYPE TCPClass::get_msg_type(std::string first_msg_word) {
@@ -202,7 +192,8 @@ void TCPClass::handle_send() {
     while (this->stop_send == false) {
         { // Mutex lock scope
             std::unique_lock<std::mutex> lock(this->editing_front_mutex);
-            if (this->messages_to_send.empty() == false) {
+            if (this->messages_to_send.empty() == false && this->allow_another_send == true) {
+                this->allow_another_send = false;
                 // Stop sending if requested
                 if (this->stop_send == true)
                     break;
@@ -210,11 +201,23 @@ void TCPClass::handle_send() {
                 // Load message to send from queue front
                 auto to_send = this->messages_to_send.front();
 
+                // Check if given message can be send in client's current state
+                if (check_msg_context(to_send.type, this->cur_state) == false) {
+                    OutputClass::out_err_intern("Sending this type of message is prohibited for current client state");
+                    // Remove this message from queue
+                    this->messages_to_send.pop();
+                    continue;
+                }
+
                 // Send it to server
                 send_data(to_send);
 
                 // Remove message after being sent
                 this->messages_to_send.pop();
+
+                // Wait with sending another msgs till REPLY from server is received
+                if (this->cur_state != S_AUTH)
+                    this->allow_another_send = true;
 
                 // After sending BYE to server, close connection
                 if (to_send.type == BYE)
@@ -226,8 +229,10 @@ void TCPClass::handle_send() {
 /***********************************************************************************/
 void TCPClass::thread_event (THREAD_EVENT event) {
     if (event == TIMEOUT) { // Nothing is received, nothing to send -> move to end state
-        if (this->cur_state.load(std::memory_order_relaxed) == S_AUTH || this->cur_state.load(std::memory_order_relaxed) == S_ERROR)
-            send_bye();
+        if (this->cur_state == S_AUTH || this->cur_state == S_ERROR) {
+            this->allow_another_send = true;
+            send_priority_bye();
+        }
     }
 }
 /***********************************************************************************/
@@ -240,49 +245,57 @@ void TCPClass::switch_to_error (std::string err_msg) {
 /***********************************************************************************/
 void TCPClass::handle_receive () {
     char in_buffer[MAXLENGTH];
-    bool err_occured = false;
+    size_t msg_shift = 0;
+    std::string response = "";
 
     while (this->stop_recv == false) {
-        ssize_t bytes_received = recv(this->socket_id, (char*)in_buffer, MAXLENGTH, 0);
+        ssize_t bytes_received = recv(this->socket_id, (in_buffer + msg_shift), (MAXLENGTH - msg_shift), 0);
 
         if (this->stop_recv == true) // Stop when requested
             break;
 
-        if (bytes_received < 0) {
+        if (bytes_received <= 0) {
             if ((errno == EWOULDBLOCK || errno == EAGAIN)) // Timeout event
                 thread_event(TIMEOUT);
-            else { // Output error and end
-                OutputClass::out_err_intern(std::strerror(errno));
-                err_occured = true;
-                this->retval = EXIT_FAILURE;
-                break;
-            }
+           else if (bytes_received < 0) // Output error
+                OutputClass::out_err_intern("Error while receiving data from server");
+            // No reason for processing zero-size response
+            response = "";
+            msg_shift = 0;
             continue;
         }
-        else if (bytes_received == 0) // No reason for processing zero response
-            continue;
 
         // Store response to string
-        std::string response(in_buffer, bytes_received);
+        std::string recv_data((in_buffer + msg_shift), bytes_received);
+        response += recv_data;
+
+        // Check if message is completed, thus. ending with "\r\n", else continue and wait for rest of message
+        if (response.find("\r\n") == std::string::npos) {
+            msg_shift += bytes_received;
+            continue;
+        }
 
         // Load whole message - each msg ends with "\r\n";
         get_line_words(response.substr(0, response.find("\r\n")), this->line_vec);
 
+        // Reset before next iteration
+        response = "";
+        msg_shift = 0;
+
         TCP_DataStruct data;
         try { // Check for valid msg_type provided
             deserialize_msg(data);
-        } catch (std::string err_msg) {
+        } catch (const std::logic_error& e) {
             // Output error and avoid further message processing
-            OutputClass::out_err_intern(err_msg);
+            OutputClass::out_err_intern(e.what());
             // Invalid message from server -> end connection
-            this->retval = EXIT_FAILURE;
-            send_err(err_msg);
-            send_bye();
+            send_err(e.what());
+            send_priority_bye();
             continue;
         }
 
         // Process response
-        switch (this->cur_state.load(std::memory_order_relaxed)) {
+        switch (this->cur_state) {
             case S_AUTH:
                 switch (data.type) {
                     case REPLY:
@@ -290,15 +303,17 @@ void TCPClass::handle_receive () {
                         OutputClass::out_reply(data.result, data.message);
 
                         if (data.result == true) // Positive reply - switch to open
-                            this->cur_state.store(S_OPEN, std::memory_order_relaxed);
-                        else // Negative reply -> resend auth msg
-                            send_message(this->auth_data);
+                            this->cur_state = S_OPEN;
+                        // Negative reply -> stay in AUTH state and allow user to re-authenticate
+                        this->allow_another_send = true;
                         break;
                     case ERR: // Output error and end
                         OutputClass::out_err_server(data.display_name, data.message);
-                        send_bye();
+                        this->allow_another_send = true;
+                        send_priority_bye();
                         break;
                     default: // Transition to error state
+                        this->allow_another_send = true;
                         switch_to_error("Unexpected message received");
                         break;
                 }
@@ -314,7 +329,7 @@ void TCPClass::handle_receive () {
                         break;
                     case ERR: // Output error and send bye
                         OutputClass::out_err_server(data.display_name, data.message);
-                        send_bye();
+                        send_priority_bye();
                         break;
                     case BYE: // End connection
                         session_end();
@@ -325,8 +340,8 @@ void TCPClass::handle_receive () {
                 }
                 break;
             case S_ERROR: // Switch to end state
-                this->cur_state.store(S_END, std::memory_order_relaxed);
-                send_bye();
+                this->cur_state = S_END;
+                send_priority_bye();
                 break;
             case S_START:
             case S_END: // Ignore everything
@@ -336,13 +351,10 @@ void TCPClass::handle_receive () {
                 break;
         }
     }
-    // End connection when error occured during receiving
-    if (err_occured == true)
-        session_end();
 }
 /***********************************************************************************/
 std::string TCPClass::load_rest (size_t start_from) {
-    std::string out;
+    std::string out = "";
     // Concatenate the rest of words as message content
     for (size_t start_ind = start_from; start_ind < this->line_vec.size(); ++start_ind) {
         if (start_ind != start_from)
@@ -354,27 +366,34 @@ std::string TCPClass::load_rest (size_t start_from) {
 /***********************************************************************************/
 void TCPClass::deserialize_msg(TCP_DataStruct& out_str) {
     out_str.type = get_msg_type(this->line_vec.at(0));
-
     switch (out_str.type) {
         case REPLY: // REPLY OK/NOK IS {MessageContent}\r\n
+            if (this->line_vec.size() < 3)
+                throw std::logic_error("Unsufficient lenght of REPLY message received");
+
             out_str.result = ((this->line_vec.at(1) == std::string("OK")) ? true : false);
             out_str.message = load_rest(2);
             break;
         case MSG: // MSG FROM {DisplayName} IS {MessageContent}\r\n
+            if (this->line_vec.size() < 4)
+                throw std::logic_error("Unsufficient lenght of MSG message received");
+
             out_str.display_name = this->line_vec.at(2);
             out_str.message = load_rest(4);
             break;
         case ERR: // ERROR FROM {DisplayName} IS {MessageContent}\r\n
+            if (this->line_vec.size() < 4)
+                throw std::logic_error("Unsufficient lenght of ERR message received");
+
             out_str.display_name = this->line_vec.at(2);
             out_str.message = load_rest(4);
             break;
         default:
-            throw std::string("Unknown message type provided");
-            break;
+            throw std::logic_error("Unknown message type provided");
     }
     // Check for msg integrity
     if (check_valid_msg<TCP_DataStruct>(out_str.type, out_str) == false)
-        throw std::string("Invalid message provided");
+        throw std::logic_error("Invalid message provided");
 }
 /***********************************************************************************/
 std::string TCPClass::convert_to_string(TCP_DataStruct &data) {

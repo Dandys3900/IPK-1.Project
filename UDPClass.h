@@ -3,7 +3,7 @@
 
 #define HEADER_SIZE 3
 
-#include "AbstractClass.h"
+#include "ClientClass.h"
 
 #pragma pack(push, 1)
 typedef struct {
@@ -23,51 +23,36 @@ typedef struct {
     std::string channel_id   = "";      // N bytes
 } UDP_DataStruct;
 
-class UDPClass : public AbstractClass {
+class UDPClass : public ClientClass {
     private:
         // Transport data
         uint16_t msg_id;
-        uint16_t port;
         uint8_t recon_attempts;
         uint16_t timeout;
 
-        int socket_id;
-        int retval;
-
-        std::string server_hostname;
-        std::string display_name;
-
-        std::atomic<FSM_STATE> cur_state;
-        std::atomic<uint16_t> replying_to_id;
         std::atomic<uint16_t> latest_sent_id;
 
-        UDP_DataStruct auth_data;
         struct sockaddr_in sock_str;
 
-        std::mutex editing_front_mutex;
-
-        std::jthread send_thread;
-        std::jthread recv_thread;
+        std::mutex send_mutex;
 
         // Vector to store all msg_ids already received
         std::vector<uint16_t> processed_msgs;
+        // Vector to store all sent msgs and possible reply values in ref_msg_id
+        std::vector<uint16_t> to_reply_ids;
 
         std::queue<std::pair<UDP_DataStruct, uint>> messages_to_send;
-
-        bool stop_send;
-        bool stop_recv;
 
         void send_message (UDP_DataStruct data);
         void send_data (UDP_DataStruct& data);
         void send_err (std::string err_msg);
         void send_confirm (uint16_t confirm_to_id);
-        void session_end ();
         void handle_send ();    // Thread for sending data to the server
         void handle_receive (); // Thread for receiving messages from server
         /* Helper methods */
         void set_socket_timeout (uint16_t timeout);
-        void deserialize_msg (UDP_DataStruct& out_str, const char* msg);
-        void get_msg_part (const char* input, size_t& input_pos, std::string& store_to);
+        void deserialize_msg (UDP_DataStruct& out_str, const char* msg, size_t total_size);
+        void get_msg_part (const char* input, size_t& input_pos, size_t max_size, std::string& store_to);
         void switch_to_error (std::string err_msg);
         void thread_event (THREAD_EVENT event, uint16_t confirm_to_id = 0);
         std::string convert_to_string (UDP_DataStruct& data);
@@ -83,8 +68,10 @@ class UDPClass : public AbstractClass {
         void send_auth (std::string user_name, std::string display_name, std::string secret) override;
         void send_msg (std::string msg) override;
         void send_join (std::string channel_id) override;
-        void send_rename (std::string new_display_name) override;
         void send_bye () override;
+        void send_priority_bye () override;
+        void session_end () override;
+        bool send_rename (std::string new_display_name) override;
     };
 
 #endif // UDPCLASS_H

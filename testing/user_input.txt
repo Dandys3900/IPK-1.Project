@@ -1,0 +1,9 @@
+ahoj
+/auth tom chyba
+/auth tom tom tom
+ahoj znovu
+zkusim join
+/join
+tak jeste jednou
+
+/join channel

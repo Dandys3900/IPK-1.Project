@@ -2,11 +2,64 @@
 #include "TCPClass.h"
 
 // Global variable for chat client
-AbstractClass* client;
+ClientClass* client = nullptr;
+// Global variable for notifying main function about EOF
+bool eof_event = false;
+
+void handle_ctrlc_signal (int sig_val /*not used*/) {
+    std::cout << "ctrl+c signal received" << std::endl;
+    client->send_priority_bye();
+}
+
+void handle_user_input () {
+    struct pollfd fds[1];
+    // Standard input (stdin)
+    fds[0].fd = 0;
+    fds[0].events = POLLIN;
+
+    // Process user input
+    std::string user_line;
+    std::vector<std::string> line_vec;
+
+    while (std::cin.eof() == false && client->stop_program() == false) {
+        int result = poll(fds, 1, /*waiting timeout [ms]*/ 100);
+        if (result > 0) {
+            if (fds[0].revents & POLLIN) { // Input is available, read it
+                std::getline(std::cin, user_line);
+                std::cout << "LOADED LINE: " << user_line << std::endl;
+
+                if (user_line.c_str()[0] == '/') {
+                    // Command - load words from user input line
+                    client->get_line_words(user_line, line_vec);
+                    if (line_vec.at(0) == std::string("/auth") && line_vec.size() == 4)
+                        client->send_auth(line_vec.at(1), line_vec.at(3), line_vec.at(2));
+                    else if (line_vec.at(0) == std::string("/join") && line_vec.size() == 2)
+                        client->send_join(line_vec.at(1));
+                    else if (line_vec.at(0) == std::string("/rename") && line_vec.size() == 2)
+                        client->send_rename(line_vec.at(1));
+                    else if (line_vec.at(0) == std::string("/help") && line_vec.size() == 1)
+                        OutputClass::out_help();
+                    else // Output error and continue
+                        OutputClass::out_err_intern("Unknown command or unsufficinet number of command params provided");
+                }
+                else // Msg to send
+                    client->send_msg(user_line);
+            }
+        }
+    }
+    // Check for EOF event
+    if (std::cin.eof() && client->stop_program() == false) {
+        eof_event = true;
+        // Notify main thread
+        client->get_cond_var().notify_one();
+    }
+}
 
 int main (int argc, char *argv[]) {
     // Store client type given by user
     char* client_type = nullptr;
+    // Mutex for conditional variable
+    std::mutex end_mutex;
 
     // Map for storing user values
     std::map<std::string, std::string> data_map;
@@ -41,60 +94,39 @@ int main (int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
+    TCPClass tcpClient(data_map);
+    UDPClass udpClient(data_map);
+
     // Decide which user to use
     if (strcmp(client_type, "tcp") == 0)
-        client = new TCPClass(data_map);
+        client = &tcpClient;
     else
-        client = new UDPClass(data_map);
+        client = &udpClient;
 
     // Try opening new connection
     try {
         client->open_connection();
-    } catch (std::string err_msg) {
-        OutputClass::out_err_intern(std::string(err_msg));
+    } catch (const std::logic_error& e) {
+        OutputClass::out_err_intern(std::string(e.what()));
         return EXIT_FAILURE;
     }
 
-    // Process user input
-    std::string user_line;
-    std::vector<std::string> line_vec;
-
     // Set interrput signal handling - CTRL+C
-    std::signal(SIGINT, [](int sig_val /*not used*/){
-        client->send_bye();
-    });
-    // Set interrput signal handling - CTRL+backslash
-    std::signal(SIGQUIT, [](int sig_val /*not used*/){
-        client->send_bye();
+    std::signal(SIGINT, handle_ctrlc_signal);
+
+    // Create thread for user input
+    std::jthread user_input = std::jthread(handle_user_input);
+
+    // Wait for either user EOF or thread ENDING
+    std::unique_lock<std::mutex> lock(end_mutex);
+    client->get_cond_var().wait(lock, [] {
+        return (eof_event || client->stop_program());
     });
 
-    while (std::getline(std::cin, user_line)) {
-        // Try process user command
-        try {
-            if (user_line.c_str()[0] == '/') {
-                // Command - load words from user input line
-                client->get_line_words(user_line, line_vec);
-                if (line_vec.at(0) == std::string("/auth") && line_vec.size() == 4)
-                    client->send_auth(line_vec.at(1), line_vec.at(3), line_vec.at(2));
-                else if (line_vec.at(0) == std::string("/join") && line_vec.size() == 2)
-                    client->send_join(line_vec.at(1));
-                else if (line_vec.at(0) == std::string("/rename") && line_vec.size() == 2)
-                    client->send_rename(line_vec.at(1));
-                else if (line_vec.at(0) == std::string("/help"))
-                    OutputClass::out_help();
-                else // Output error and continue
-                    OutputClass::out_err_intern("Unknown command or unsufficinet number of command params provided");
-            }
-            else // Msg to send
-                client->send_msg(user_line);
-        } catch (std::string err_msg) {
-            // Output error but continue
-            OutputClass::out_err_intern(std::string(err_msg));
-        }
-    }
-    // EOF event - CTRL+D
-    client->send_bye();
+    if (eof_event == true) // User EOF event
+        client->send_bye();
+    client->wait_for_threads();
 
-    delete client;
+    // End program
     return EXIT_SUCCESS;
 }

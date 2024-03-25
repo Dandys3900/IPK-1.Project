@@ -1,4 +1,4 @@
-import socket, os
+import socket
 
 # Define server address and port
 SERVER_HOST = '127.0.0.1' # Localhost
