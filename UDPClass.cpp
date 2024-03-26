@@ -20,8 +20,6 @@ UDPClass::UDPClass (std::map<std::string, std::string> data_map)
 
     if ((iter = data_map.find("timeout")) != data_map.end())
         this->timeout = static_cast<uint16_t>(std::stoi(iter->second));
-
-    this->display_name = "pokus";
 }
 /***********************************************************************************/
 void UDPClass::open_connection () {
@@ -182,6 +180,8 @@ void UDPClass::send_message (UDP_DataStruct data) {
 void UDPClass::send_data (UDP_DataStruct& data) {
     // Store msg_id to avoid multiple sends of the same msg in handle_send
     this->latest_sent_id = data.header.msg_id;
+
+    // todo, when sending JOIN also wait for server REPLY as its request
 
     // Prepare data to send
     std::string message = convert_to_string(data);
@@ -369,8 +369,6 @@ void UDPClass::handle_receive () {
                         // Replying to unexpected message id
                         if ((std::find(to_reply_ids.begin(), to_reply_ids.end(), data.ref_msg_id)) == to_reply_ids.end()) {
                             switch_to_error("Reply message has invalid ref_id");
-                            // End session
-                            send_priority_bye();
                             break;
                         }
                         // Output message
@@ -397,8 +395,6 @@ void UDPClass::handle_receive () {
                         // Replying to unexpected message id
                         if ((std::find(to_reply_ids.begin(), to_reply_ids.end(), data.ref_msg_id)) == to_reply_ids.end()) {
                             switch_to_error("Reply message has invalid ref_id");
-                            // End session
-                            send_priority_bye();
                             break;
                         }
                         // Output server reply
@@ -419,10 +415,7 @@ void UDPClass::handle_receive () {
                         break;
                 }
                 break;
-            case S_ERROR: // Switch to end state
-                this->cur_state = S_END;
-                send_priority_bye();
-                break;
+            case S_ERROR:
             case S_START:
             case S_END: // Ignore everything
                 break;
@@ -436,8 +429,12 @@ void UDPClass::handle_receive () {
 void UDPClass::switch_to_error (std::string err_msg) {
     // Notify user
     OutputClass::out_err_intern(err_msg);
+    // Clear the queue
+    this->high_priority = true;
     // Notify server
     send_err(err_msg);
+    // Then send BYE and end
+    send_bye();
 }
 /***********************************************************************************/
 void UDPClass::get_msg_part (const char* input, size_t& input_pos, size_t max_size, std::string& store_to) {
