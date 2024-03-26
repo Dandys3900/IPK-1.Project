@@ -21,16 +21,15 @@ typedef struct {
     std::string display_name = "";      // N bytes
     std::string secret       = "";      // N bytes
     std::string channel_id   = "";      // N bytes
+    bool sent                = false;   // 1 bytes
 } UDP_DataStruct;
 
 class UDPClass : public ClientClass {
     private:
         // Transport data
-        uint16_t msg_id;
+        std::atomic<uint16_t> msg_id;
         uint8_t recon_attempts;
         uint16_t timeout;
-
-        std::atomic<uint16_t> latest_sent_id;
 
         struct sockaddr_in sock_str;
 

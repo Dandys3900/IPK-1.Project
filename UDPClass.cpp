@@ -4,8 +4,7 @@ UDPClass::UDPClass (std::map<std::string, std::string> data_map)
     : ClientClass      (),
       msg_id           (0),
       recon_attempts   (3),
-      timeout          (250),
-      latest_sent_id   (1) // Initially must be different from msg_id (0)
+      timeout          (250)
 {
     std::map<std::string, std::string>::iterator iter;
     // Look for init values in map to override init values
@@ -109,6 +108,7 @@ bool UDPClass::send_rename (std::string new_display_name) {
 }
 /***********************************************************************************/
 void UDPClass::send_confirm (uint16_t confirm_to_id) {
+    std::cout << "SENDING CONFIRM" << confirm_to_id << std::endl;
     UDP_DataStruct data = {
         .header = create_header(CONFIRM),
         .ref_msg_id = confirm_to_id
@@ -168,21 +168,15 @@ void UDPClass::send_message (UDP_DataStruct data) {
         std::lock_guard<std::mutex> lock(this->editing_front_mutex);
         if (this->high_priority == true) {
             this->high_priority = false;
-            // Erase the queue and place there the BYE msg
+            // Erase the queue
             this->messages_to_send = {};
-            this->messages_to_send.push({data, this->recon_attempts});
         }
-        else // Add new message to the queue with given resend count
-            this->messages_to_send.push({data, this->recon_attempts});
+        // Add new message to the queue with given resend count
+        this->messages_to_send.push({data, this->recon_attempts});
     }
 }
 /***********************************************************************************/
 void UDPClass::send_data (UDP_DataStruct& data) {
-    // Store msg_id to avoid multiple sends of the same msg in handle_send
-    this->latest_sent_id = data.header.msg_id;
-
-    // todo, when sending JOIN also wait for server REPLY as its request
-
     // Prepare data to send
     std::string message = convert_to_string(data);
     const char* out_buffer = message.data();
@@ -196,12 +190,16 @@ void UDPClass::send_data (UDP_DataStruct& data) {
     // Check for errors
     if (bytes_send < 0)
         OutputClass::out_err_intern("Error while sending data to server");
+    else // Mark msg as sent
+        data.sent = true;
 }
 /***********************************************************************************/
 void UDPClass::handle_send () {
     while (this->stop_send == false) {
         std::unique_lock<std::mutex> sendlock(this->send_mutex);
-        this->send_cond_var.wait(sendlock, [&] { return (!this->messages_to_send.empty() || this->stop_send); });
+        this->send_cond_var.wait(sendlock, [&] {
+            return (!this->messages_to_send.empty() || this->stop_send);
+        });
 
         // Avoid racing when reading from queue
         std::unique_lock<std::mutex> lock(this->editing_front_mutex);
@@ -213,11 +211,12 @@ void UDPClass::handle_send () {
         if (this->stop_send == true)
             break;
 
+        //std::cout << "getting front" << std::endl;
         // Load message to send from queue front
-        auto to_send = this->messages_to_send.front();
+        auto& to_send = this->messages_to_send.front();
 
         // Avoid sending multiple msgs with the same msg_id
-        if (to_send.first.header.msg_id != this->latest_sent_id) {
+        if (to_send.first.sent == false) {
             // Check if given message can be send in client's current state
             if (check_msg_context(to_send.first.header.type, this->cur_state) == false) {
                 OutputClass::out_err_intern("Sending this type of message is prohibited for current client state");
@@ -248,8 +247,7 @@ void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
             auto& front_msg = this->messages_to_send.front();
 
             // There is/are msgs in queue, but not send yet, ignore and avoid their resend count decrement
-            if (front_msg.first.header.msg_id != this->latest_sent_id) {}
-            else if (event == TIMEOUT) { // Timeout event occured
+            if (event == TIMEOUT && front_msg.first.sent == true) { // Timeout event occured
                 std::cout << "TIMEOUT EVENT" << std::endl;
                 // Decrease front msg resend count
                 if (front_msg.second > 1) {
@@ -257,33 +255,27 @@ void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
                     front_msg.second -= 1;
                     // Ensure msg_id uniqueness by changing it each time
                     front_msg.first.header = create_header(front_msg.first.header.type);
+                    // Reset sent flag
+                    front_msg.first.sent = false;
                 }
-                else { // Pop it from queue and continue with another message (if any)
-                    // BYE msg to server timeouted -> end connection
-                    if (front_msg.first.header.type == BYE)
-                        session_end();
-                    else {
-                        // Remove message as lost in transmit
-                        this->messages_to_send.pop();
-                        // No response from server, send BYE and move to END state
-                        if (this->cur_state == S_AUTH || this->cur_state == S_ERROR)
-                            no_server_response = true;
-                    }
-                }
+                else // No reply from server -> end connection
+                    session_end();
             }
             else if (event == CONFIRMATION) { // Confirmation event occured
                 if (front_msg.first.header.msg_id == confirm_to_id) { // Pop it from queue and continue with another message (if any)
                     // Confirmed BYE msg -> end connection
-                    std::cout << "MESSAGE CONFIRMED" << std::endl;
+                    std::cout << "MESSAGE CONFIRMED" << confirm_to_id << std::endl;
                     if (front_msg.first.header.type == BYE)
                         session_end();
                     else {
-                        if (front_msg.first.header.type == AUTH) {
+                        uint8_t msg_type = front_msg.first.header.type;
+                        // Remove from queue after succesful confirmation
+                        this->messages_to_send.pop();
+
+                        if (msg_type == AUTH) {
                             this->cur_state = S_AUTH_CONFD;
-                            this->messages_to_send.pop();
                             return;
                         }
-                        this->messages_to_send.pop();
                     }
                 }
                 else
@@ -459,6 +451,8 @@ void UDPClass::deserialize_msg (UDP_DataStruct& out_str, const char* msg, size_t
             msg_pos += sizeof(out_str.ref_msg_id);
             // Message
             get_msg_part(msg + msg_pos, msg_pos, (total_size - msg_pos), out_str.message);
+            // Convert ref_msg_id to correct indian
+            out_str.ref_msg_id = htons(out_str.ref_msg_id);
             break;
         case ERR:
         case MSG:
@@ -475,9 +469,6 @@ void UDPClass::deserialize_msg (UDP_DataStruct& out_str, const char* msg, size_t
     // Check for msg integrity
     if (check_valid_msg<UDP_DataStruct>(out_str.header.type, out_str) == false)
         throw std::logic_error("Invalid message provided");
-
-    // Convert ref_msg_id to correct indian
-    out_str.ref_msg_id = htons(out_str.ref_msg_id);
 }
 /***********************************************************************************/
 std::string UDPClass::get_str_msg_id (uint16_t msg_id) {
@@ -485,7 +476,6 @@ std::string UDPClass::get_str_msg_id (uint16_t msg_id) {
     // Extract the individual bytes
     char high_byte = static_cast<char>((msg_id >> 8) & 0xFF);
     char low_byte  = static_cast<char>(msg_id & 0xFF);
-
     // Append the bytes
     retval += high_byte;
     retval += low_byte;
@@ -497,7 +487,10 @@ std::string UDPClass::convert_to_string (UDP_DataStruct& data) {
     std::string msg(1, static_cast<char>(data.header.type));
     /*
         todo:
-            sledovat pocty bye poslanych pro ruzne cases
+            confirm id je asi spatne
+            po join cekat na reply
+            multiple messages najednou
+            ta binarka musi byt executable (chmod +x ig)
     */
     switch (data.header.type) {
         case CONFIRM:
