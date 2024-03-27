@@ -15,8 +15,6 @@ typedef struct {
 
 class TCPClass : public ClientClass {
     private:
-        bool allow_another_send;
-
         // Vector for storing words of received message
         std::vector<std::string> line_vec;
 

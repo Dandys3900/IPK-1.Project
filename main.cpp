@@ -39,10 +39,10 @@ void handle_user_input () {
                         client->send_rename(line_vec.at(1));
                     else if (line_vec.at(0) == std::string("/help") && line_vec.size() == 1)
                         OutputClass::out_help();
-                    else // Output error and continue
+                    else if (std::cin.eof() == false) // Output error and continue
                         OutputClass::out_err_intern("Unknown command or unsufficinet number of command params provided");
                 }
-                else // Msg to send
+                else if (std::cin.eof() == false) // Msg to send
                     client->send_msg(user_line);
             }
         }

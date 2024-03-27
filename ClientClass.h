@@ -20,6 +20,7 @@ class ClientClass {
           stop_send       (false),
           stop_recv       (false),
           high_priority   (false),
+          wait_for_reply  (false),
           end_program     (false),
           cur_state       (S_START)
         {
@@ -92,7 +93,7 @@ class ClientClass {
         bool check_msg_context (uint8_t msg_type, std::atomic<FSM_STATE>& cur_state) {
             switch (msg_type) {
                 case AUTH:
-                    if (cur_state != S_START && cur_state != S_AUTH && cur_state != S_AUTH_CONFD)
+                    if (cur_state != S_START && cur_state != S_AUTH)
                         return false;
                     // Move to auth state for handling reply msgs
                     cur_state = S_AUTH;
@@ -129,6 +130,7 @@ class ClientClass {
         bool stop_recv;
         bool high_priority;
 
+        std::atomic<bool> wait_for_reply;
         std::atomic<bool> end_program;
         std::atomic<FSM_STATE> cur_state;
 

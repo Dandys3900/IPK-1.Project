@@ -1,10 +1,10 @@
 #include "UDPClass.h"
 
 UDPClass::UDPClass (std::map<std::string, std::string> data_map)
-    : ClientClass      (),
-      msg_id           (0),
-      recon_attempts   (3),
-      timeout          (250)
+    : ClientClass    (),
+      msg_id         (0),
+      recon_attempts (3),
+      timeout        (250)
 {
     std::map<std::string, std::string>::iterator iter;
     // Look for init values in map to override init values
@@ -167,9 +167,12 @@ void UDPClass::send_message (UDP_DataStruct data) {
     {
         std::lock_guard<std::mutex> lock(this->editing_front_mutex);
         if (this->high_priority == true) {
-            this->high_priority = false;
-            // Erase the queue
+            // Clear the queue
             this->messages_to_send = {};
+            // Reset waiting for reply flag
+            this->wait_for_reply = false;
+            // Reset priority flag after using
+            this->high_priority = false;
         }
         // Add new message to the queue with given resend count
         this->messages_to_send.push({data, this->recon_attempts});
@@ -204,7 +207,8 @@ void UDPClass::handle_send () {
         // Avoid racing when reading from queue
         std::unique_lock<std::mutex> lock(this->editing_front_mutex);
 
-        if (this->messages_to_send.empty() == true || this->cur_state == S_AUTH_CONFD)
+        // Nothing to send/blocked to send anything atm (waiting for server reply)
+        if (this->messages_to_send.empty() == true || this->wait_for_reply == true)
             continue;
 
         // Stop sending if requested
@@ -235,14 +239,13 @@ void UDPClass::handle_send () {
 }
 /***********************************************************************************/
 void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
-    bool no_server_response = false;
-    // Timeout happened when waiting for REPLY in confirmed AUTH state -> end connection
-    if (event == TIMEOUT && this->cur_state == S_AUTH_CONFD)
-        no_server_response = true;
-
-    {
+    // Timeout happened when waiting for REPLY -> end connection
+    if (event == TIMEOUT && this->wait_for_reply == true) {
+        send_priority_bye();
+    }
+    else {
         std::lock_guard<std::mutex> lock(this->editing_front_mutex);
-        if (this->messages_to_send.empty() == false && no_server_response == false) {
+        if (this->messages_to_send.empty() == false) {
             // Skip if messages queue is empty as nothing to deal with
             auto& front_msg = this->messages_to_send.front();
 
@@ -272,8 +275,8 @@ void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
                         // Remove from queue after succesful confirmation
                         this->messages_to_send.pop();
 
-                        if (msg_type == AUTH) {
-                            this->cur_state = S_AUTH_CONFD;
+                        if (msg_type == AUTH || msg_type == JOIN) {
+                            this->wait_for_reply = true;
                             return;
                         }
                     }
@@ -283,9 +286,6 @@ void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
             }
         }
     }
-    // Corresponds to the FMS when going from AUTH/ERROR -> BYE, the "_/BYE" option
-    if (no_server_response)
-        send_priority_bye();
     // Notify waiting thread (if any)
     this->send_cond_var.notify_one();
 }
@@ -324,12 +324,15 @@ void UDPClass::handle_receive () {
         std::memcpy(&data.header, in_buffer, sizeof(UDP_Header));
         // Convert msg_id to correct indian
         data.header.msg_id = htons(data.header.msg_id);
+        std::cout << "value after htons " << data.header.msg_id << std::endl;
 
         if (data.header.type == CONFIRM) { // Confirmation from server event
             thread_event(CONFIRMATION, data.header.msg_id);
+            std::cout << "value after confirmation event " << data.header.msg_id << std::endl;
             continue;
         }
 
+        std::cout << "value before sending confirm " << data.header.msg_id << std::endl;
         // Send confirmation to the server before processing received message
         send_confirm(data.header.msg_id);
 
@@ -353,9 +356,7 @@ void UDPClass::handle_receive () {
 
         // Process response
         switch (this->cur_state) {
-            case S_AUTH: // AUTH not confirmed yet, continue
-                continue;
-            case S_AUTH_CONFD:
+            case S_AUTH:
                 switch (data.header.type) {
                     case REPLY:
                         // Replying to unexpected message id
@@ -368,9 +369,11 @@ void UDPClass::handle_receive () {
 
                         if (data.result == true) // Positive reply - switch to open
                             this->cur_state = S_OPEN;
+                        // else: Negative reply -> stay in AUTH state and allow user to re-authenticate
 
+                        // Reset waiting for reply flag
+                        this->wait_for_reply = false;
                         this->send_cond_var.notify_one();
-                        // Negative reply -> stay in AUTH state and allow user to re-authenticate
                         break;
                     case ERR: // Output error and end
                         OutputClass::out_err_server(data.display_name, data.message);
@@ -391,6 +394,9 @@ void UDPClass::handle_receive () {
                         }
                         // Output server reply
                         OutputClass::out_reply(data.result, data.message);
+                        // Reset waiting for reply flag
+                        this->wait_for_reply = false;
+                        this->send_cond_var.notify_one();
                         break;
                     case MSG: // Output message
                         OutputClass::out_msg(data.display_name, data.message);
@@ -488,8 +494,6 @@ std::string UDPClass::convert_to_string (UDP_DataStruct& data) {
     /*
         todo:
             confirm id je asi spatne
-            po join cekat na reply
-            multiple messages najednou
             ta binarka musi byt executable (chmod +x ig)
     */
     switch (data.header.type) {

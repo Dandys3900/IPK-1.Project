@@ -33,6 +33,9 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             # Send positive reply
             reply = "REPLY OK VSE JE OK\r\n"
             client_socket.send(reply.encode())  # Encode the reply string to bytes
+
+            if "bye" in data.decode():
+                break
         except Exception as e:
             print(f"Error occurred: {e}")
             break

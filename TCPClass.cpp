@@ -1,8 +1,7 @@
 #include "TCPClass.h"
 
 TCPClass::TCPClass(std::map<std::string, std::string> data_map)
-    : ClientClass        (),
-      allow_another_send (true)
+    : ClientClass ()
 {
     std::map<std::string, std::string>::iterator iter;
     // Look for init values in map to override init values
@@ -21,6 +20,11 @@ void TCPClass::open_connection() {
     struct hostent *server = gethostbyname(this->server_hostname.c_str());
     if (!server)
         throw std::logic_error("Unknown or invalid hostname provided");
+
+    /*
+        todo
+            kdyz se server vypne, tak klient to nepozna
+    */
 
     // Setup server details
     struct sockaddr_in server_addr;
@@ -150,13 +154,15 @@ void TCPClass::send_message(TCP_DataStruct &data) {
     // Avoid racing between main and response thread
     std::lock_guard<std::mutex> lock(this->editing_front_mutex);
     if (this->high_priority == true) {
-        this->high_priority = false;
-        // Erase the queue and place there the BYE msg
+        // Clear the queue
         this->messages_to_send = {};
-        this->messages_to_send.push(data);
+        // Reset waiting for reply flag
+        this->wait_for_reply = false;
+        // Reset priority flag after using
+        this->high_priority = false;
     }
-    else // Add new message to the queue with given resend count
-        this->messages_to_send.push(data);
+    // Add new message to the queue with given resend count
+    this->messages_to_send.push(data);
 }
 /***********************************************************************************/
 void TCPClass::send_data(TCP_DataStruct &data) {
@@ -192,8 +198,7 @@ void TCPClass::handle_send() {
     while (this->stop_send == false) {
         { // Mutex lock scope
             std::unique_lock<std::mutex> lock(this->editing_front_mutex);
-            if (this->messages_to_send.empty() == false && this->allow_another_send == true) {
-                this->allow_another_send = false;
+            if (this->messages_to_send.empty() == false && this->wait_for_reply == false) {
                 // Stop sending if requested
                 if (this->stop_send == true)
                     break;
@@ -212,35 +217,37 @@ void TCPClass::handle_send() {
                 // Send it to server
                 send_data(to_send);
 
-                // Remove message after being sent
-                this->messages_to_send.pop();
-
                 // Wait with sending another msgs till REPLY from server is received
-                if (this->cur_state != S_AUTH)
-                    this->allow_another_send = true;
+                if (to_send.type == AUTH || to_send.type == JOIN)
+                    this->wait_for_reply = true;
 
                 // After sending BYE to server, close connection
                 if (to_send.type == BYE)
                     session_end();
+
+                // Remove message after being sent
+                this->messages_to_send.pop();
             }
         } // Mutex unlocks when getting out of scope
     }
 }
 /***********************************************************************************/
 void TCPClass::thread_event (THREAD_EVENT event) {
-    if (event == TIMEOUT) { // Nothing is received, nothing to send -> move to end state
-        if (this->cur_state == S_AUTH || this->cur_state == S_ERROR) {
-            this->allow_another_send = true;
-            send_priority_bye();
-        }
+    // Timeout happened when waiting for REPLY -> end connection
+    if (event == TIMEOUT && this->wait_for_reply == true) {
+        send_priority_bye();
     }
 }
 /***********************************************************************************/
 void TCPClass::switch_to_error (std::string err_msg) {
     // Notify user
     OutputClass::out_err_intern(err_msg);
+    // Clear the queue
+    this->high_priority = true;
     // Notify server
     send_err(err_msg);
+    // Then send BYE and end
+    send_bye();
 }
 /***********************************************************************************/
 void TCPClass::handle_receive () {
@@ -249,7 +256,8 @@ void TCPClass::handle_receive () {
     std::string response = "";
 
     while (this->stop_recv == false) {
-        ssize_t bytes_received = recv(this->socket_id, (in_buffer + msg_shift), (MAXLENGTH - msg_shift), 0);
+        ssize_t bytes_received =
+            recv(this->socket_id, (in_buffer + msg_shift), (MAXLENGTH - msg_shift), 0);
 
         if (this->stop_recv == true) // Stop when requested
             break;
@@ -257,11 +265,12 @@ void TCPClass::handle_receive () {
         if (bytes_received <= 0) {
             if ((errno == EWOULDBLOCK || errno == EAGAIN)) // Timeout event
                 thread_event(TIMEOUT);
-           else if (bytes_received < 0) // Output error
+            else if (bytes_received == 0) { // No reason for processing zero-size response
+                response = "";
+                msg_shift = 0;
+            }
+            else // Output error
                 OutputClass::out_err_intern("Error while receiving data from server");
-            // No reason for processing zero-size response
-            response = "";
-            msg_shift = 0;
             continue;
         }
 
@@ -270,86 +279,101 @@ void TCPClass::handle_receive () {
         response += recv_data;
 
         // Check if message is completed, thus. ending with "\r\n", else continue and wait for rest of message
-        if (response.find("\r\n") == std::string::npos) {
+        size_t end_symb_pos = response.find_last_of("\r\n");
+        std::cout << "end pos: " << std::to_string(end_symb_pos) << std::endl;
+        if (end_symb_pos != (bytes_received - 1)) {
             msg_shift += bytes_received;
             continue;
         }
 
-        // Load whole message - each msg ends with "\r\n";
-        get_line_words(response.substr(0, response.find("\r\n")), this->line_vec);
+        // Reuse it
+        end_symb_pos = 0;
+        // When given buffer contains multiple messages, iterate thorugh them
+        while ((end_symb_pos = response.find("\r\n")) != std::string::npos) {
+            std::string cur_msg = response.substr(0, end_symb_pos);
+            std::cout << "LOADED MSG: " << cur_msg << std::endl;
+
+            // Move in buffer to another msg (if any)
+            response.erase(0, (end_symb_pos + /*delimiter length*/ 2));
+
+            // Load whole message - each msg ends with "\r\n";
+            get_line_words(cur_msg, this->line_vec);
+
+            TCP_DataStruct data;
+            try { // Check for valid msg_type provided
+                deserialize_msg(data);
+            } catch (const std::logic_error& e) {
+                // Output error and avoid further message processing
+                OutputClass::out_err_intern(e.what());
+                // Invalid message from server -> end connection
+                send_err(e.what());
+                send_priority_bye();
+                break;
+            }
+
+            // Process response
+            switch (this->cur_state) {
+                case S_AUTH:
+                    switch (data.type) {
+                        case REPLY:
+                            // Output message
+                            OutputClass::out_reply(data.result, data.message);
+
+                            if (data.result == true) // Positive reply - switch to open
+                                this->cur_state = S_OPEN;
+                            // else: Negative reply -> stay in AUTH state and allow user to re-authenticate
+
+                            // Reset waiting for reply flag
+                            this->wait_for_reply = false;
+                            break;
+                        case ERR: // Output error and end
+                            OutputClass::out_err_server(data.display_name, data.message);
+                            send_priority_bye();
+                            break;
+                        default: // Transition to error state
+                            switch_to_error("Unexpected message received");
+                            break;
+                    }
+                    break;
+                case S_OPEN:
+                    switch (data.type) {
+                        case REPLY:
+                            // Output server reply
+                            OutputClass::out_reply(data.result, data.message);
+                            // Reset waiting for reply flag
+                            this->wait_for_reply = false;
+                            break;
+                        case MSG: // Output message
+                            OutputClass::out_msg(data.display_name, data.message);
+                            break;
+                        case ERR: // Output error and send bye
+                            OutputClass::out_err_server(data.display_name, data.message);
+                            send_priority_bye();
+                            break;
+                        case BYE: // End connection
+                            session_end();
+                            break;
+                        default: // Transition to error state
+                            switch_to_error("Unexpected message received");
+                            break;
+                    }
+                    break;
+                case S_ERROR: // Switch to end state
+                    this->cur_state = S_END;
+                    send_priority_bye();
+                    break;
+                case S_START:
+                case S_END: // Ignore everything
+                    break;
+                default: // Not expected state, output error
+                    OutputClass::out_err_intern("Unknown current client state");
+                    break;
+            }
+        }
 
         // Reset before next iteration
         response = "";
         msg_shift = 0;
-
-        TCP_DataStruct data;
-        try { // Check for valid msg_type provided
-            deserialize_msg(data);
-        } catch (const std::logic_error& e) {
-            // Output error and avoid further message processing
-            OutputClass::out_err_intern(e.what());
-            // Invalid message from server -> end connection
-            send_err(e.what());
-            send_priority_bye();
-            continue;
-        }
-
-        // Process response
-        switch (this->cur_state) {
-            case S_AUTH:
-                switch (data.type) {
-                    case REPLY:
-                        // Output message
-                        OutputClass::out_reply(data.result, data.message);
-
-                        if (data.result == true) // Positive reply - switch to open
-                            this->cur_state = S_OPEN;
-                        // Negative reply -> stay in AUTH state and allow user to re-authenticate
-                        this->allow_another_send = true;
-                        break;
-                    case ERR: // Output error and end
-                        OutputClass::out_err_server(data.display_name, data.message);
-                        this->allow_another_send = true;
-                        send_priority_bye();
-                        break;
-                    default: // Transition to error state
-                        this->allow_another_send = true;
-                        switch_to_error("Unexpected message received");
-                        break;
-                }
-                break;
-            case S_OPEN:
-                switch (data.type) {
-                    case REPLY:
-                        // Output server reply
-                        OutputClass::out_reply(data.result, data.message);
-                        break;
-                    case MSG: // Output message
-                        OutputClass::out_msg(data.display_name, data.message);
-                        break;
-                    case ERR: // Output error and send bye
-                        OutputClass::out_err_server(data.display_name, data.message);
-                        send_priority_bye();
-                        break;
-                    case BYE: // End connection
-                        session_end();
-                        break;
-                    default: // Transition to error state
-                        switch_to_error("Unexpected message received");
-                        break;
-                }
-                break;
-            case S_ERROR: // Switch to end state
-                this->cur_state = S_END;
-                send_priority_bye();
-                break;
-            case S_START:
-            case S_END: // Ignore everything
-                break;
-            default: // Not expected state, output error
-                OutputClass::out_err_intern("Unknown current client state");
-                break;
-        }
     }
 }
 /***********************************************************************************/
