@@ -21,11 +21,6 @@ void TCPClass::open_connection() {
     if (!server)
         throw std::logic_error("Unknown or invalid hostname provided");
 
-    /*
-        todo
-            kdyz se server vypne, tak klient to nepozna
-    */
-
     // Setup server details
     struct sockaddr_in server_addr;
     // Make sure everything is reset
@@ -40,9 +35,6 @@ void TCPClass::open_connection() {
     // Connect to server
     if (connect(this->socket_id, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0)
         throw std::logic_error("Error connecting to TCP server");
-
-    // Set rimeout for checking if server is online
-    set_socket_timeout(/*1sec*/);
 
     // Create threads for sending and receiving server msgs
     this->send_thread = std::jthread(&TCPClass::handle_send, this);
@@ -134,16 +126,6 @@ void TCPClass::send_err (std::string err_msg) {
     send_message(data);
 }
 /***********************************************************************************/
-void TCPClass::set_socket_timeout () {
-    struct timeval time = {
-        .tv_sec = 1, // 1 second
-        .tv_usec = 0
-    };
-    // Set timeout for created socket
-    if (setsockopt(this->socket_id, SOL_SOCKET, SO_RCVTIMEO, (char*)&(time), sizeof(struct timeval)) < 0)
-        throw std::logic_error("Setting receive timeout failed");
-}
-/***********************************************************************************/
 void TCPClass::send_message(TCP_DataStruct &data) {
     // Check for message validity
     if (check_valid_msg<TCP_DataStruct>(data.type, data) == false) {
@@ -179,17 +161,17 @@ void TCPClass::send_data(TCP_DataStruct &data) {
 }
 /***********************************************************************************/
 MSG_TYPE TCPClass::get_msg_type(std::string first_msg_word) {
-    if (first_msg_word == std::string("REPLY"))
+    if (std::regex_match(first_msg_word, std::regex("^REPLY$", std::regex_constants::icase)))
         return REPLY;
-    if (first_msg_word == std::string("AUTH"))
+    if (std::regex_match(first_msg_word, std::regex("^AUTH$", std::regex_constants::icase)))
         return AUTH;
-    if (first_msg_word == std::string("JOIN"))
+    if (std::regex_match(first_msg_word, std::regex("^JOIN$", std::regex_constants::icase)))
         return JOIN;
-    if (first_msg_word == std::string("MSG"))
+    if (std::regex_match(first_msg_word, std::regex("^MSG$", std::regex_constants::icase)))
         return MSG;
-    if (first_msg_word == std::string("ERR"))
+    if (std::regex_match(first_msg_word, std::regex("^ERR$", std::regex_constants::icase)))
         return ERR;
-    if (first_msg_word == std::string("BYE"))
+    if (std::regex_match(first_msg_word, std::regex("^BYE$", std::regex_constants::icase)))
         return BYE;
     return NO_TYPE;
 }
@@ -232,13 +214,6 @@ void TCPClass::handle_send() {
     }
 }
 /***********************************************************************************/
-void TCPClass::thread_event (THREAD_EVENT event) {
-    // Timeout happened when waiting for REPLY -> end connection
-    if (event == TIMEOUT && this->wait_for_reply == true) {
-        send_priority_bye();
-    }
-}
-/***********************************************************************************/
 void TCPClass::switch_to_error (std::string err_msg) {
     // Notify user
     OutputClass::out_err_intern(err_msg);
@@ -253,7 +228,7 @@ void TCPClass::switch_to_error (std::string err_msg) {
 void TCPClass::handle_receive () {
     char in_buffer[MAXLENGTH];
     size_t msg_shift = 0;
-    std::string response = "";
+    std::string response;
 
     while (this->stop_recv == false) {
         ssize_t bytes_received =
@@ -263,15 +238,9 @@ void TCPClass::handle_receive () {
             break;
 
         if (bytes_received <= 0) {
-            if ((errno == EWOULDBLOCK || errno == EAGAIN)) // Timeout event
-                thread_event(TIMEOUT);
-            else if (bytes_received == 0) { // No reason for processing zero-size response
-                response = "";
-                msg_shift = 0;
-            }
-            else // Output error
-                OutputClass::out_err_intern("Error while receiving data from server");
-            continue;
+            OutputClass::out_err_intern("Unexpected server disconnected");
+            session_end();
+            break;
         }
 
         // Store response to string
@@ -279,35 +248,29 @@ void TCPClass::handle_receive () {
         response += recv_data;
 
         // Check if message is completed, thus. ending with "\r\n", else continue and wait for rest of message
-        size_t end_symb_pos = response.find_last_of("\r\n");
-        std::cout << "end pos: " << std::to_string(end_symb_pos) << std::endl;
-        if (end_symb_pos != (bytes_received - 1)) {
+        if (std::regex_search(recv_data, std::regex("\\r\\n$")) == false) {
             msg_shift += bytes_received;
             continue;
         }
 
         // Reuse it
-        end_symb_pos = 0;
+        size_t end_symb_pos = 0;
         // When given buffer contains multiple messages, iterate thorugh them
         while ((end_symb_pos = response.find("\r\n")) != std::string::npos) {
             std::string cur_msg = response.substr(0, end_symb_pos);
-            std::cout << "LOADED MSG: " << cur_msg << std::endl;
 
             // Move in buffer to another msg (if any)
-            response.erase(0, (end_symb_pos + /*delimiter length*/ 2));
+            response.erase(0, (end_symb_pos + /*delimiter length*/2));
 
             // Load whole message - each msg ends with "\r\n";
-            get_line_words(cur_msg, this->line_vec);
+            split_to_vec(cur_msg, this->line_vec, ' ');
 
             TCP_DataStruct data;
             try { // Check for valid msg_type provided
                 deserialize_msg(data);
             } catch (const std::logic_error& e) {
-                // Output error and avoid further message processing
-                OutputClass::out_err_intern(e.what());
                 // Invalid message from server -> end connection
-                send_err(e.what());
-                send_priority_bye();
+                switch_to_error(e.what());
                 break;
             }
 
@@ -370,7 +333,6 @@ void TCPClass::handle_receive () {
                     break;
             }
         }
-
         // Reset before next iteration
         response = "";
         msg_shift = 0;
@@ -394,9 +356,8 @@ void TCPClass::deserialize_msg(TCP_DataStruct& out_str) {
         case REPLY: // REPLY OK/NOK IS {MessageContent}\r\n
             if (this->line_vec.size() < 3)
                 throw std::logic_error("Unsufficient lenght of REPLY message received");
-
-            out_str.result = ((this->line_vec.at(1) == std::string("OK")) ? true : false);
-            out_str.message = load_rest(2);
+            out_str.result = (std::regex_match(this->line_vec.at(1), std::regex("^OK$", std::regex_constants::icase)) ? true : false);
+            out_str.message = load_rest(3);
             break;
         case MSG: // MSG FROM {DisplayName} IS {MessageContent}\r\n
             if (this->line_vec.size() < 4)
@@ -433,7 +394,7 @@ std::string TCPClass::convert_to_string(TCP_DataStruct &data) {
         msg = "MSG FROM " + data.display_name + " IS " + data.message + "\r\n";
         break;
     case ERR: // ERROR FROM {DisplayName} IS {MessageContent}\r\n
-        msg = "ERROR FROM " + data.display_name + " IS " + data.message + "\r\n";
+        msg = "ERR FROM " + data.display_name + " IS " + data.message + "\r\n";
         break;
     case BYE: // BYE\r\n
         msg = "BYE\r\n";

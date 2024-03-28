@@ -26,9 +26,7 @@ class TCPClass : public ClientClass {
         void handle_send ();
         void handle_receive ();
          /* Helper methods */
-        void set_socket_timeout ();
         void switch_to_error (std::string err_msg);
-        void thread_event (THREAD_EVENT event);
         MSG_TYPE get_msg_type (std::string first_msg_word);
         std::string convert_to_string (TCP_DataStruct& data);
         void deserialize_msg(TCP_DataStruct& out_str);

@@ -108,7 +108,6 @@ bool UDPClass::send_rename (std::string new_display_name) {
 }
 /***********************************************************************************/
 void UDPClass::send_confirm (uint16_t confirm_to_id) {
-    std::cout << "SENDING CONFIRM" << confirm_to_id << std::endl;
     UDP_DataStruct data = {
         .header = create_header(CONFIRM),
         .ref_msg_id = confirm_to_id
@@ -160,9 +159,6 @@ void UDPClass::send_message (UDP_DataStruct data) {
         OutputClass::out_err_intern("Invalid content of message provided, wont send");
         return;
     }
-
-    std::cout << "ADDING MSG TO QUEUE: " << std::to_string(data.header.type) << std::endl;
-
     // Avoid racing between main and response thread
     {
         std::lock_guard<std::mutex> lock(this->editing_front_mutex);
@@ -183,8 +179,6 @@ void UDPClass::send_data (UDP_DataStruct& data) {
     // Prepare data to send
     std::string message = convert_to_string(data);
     const char* out_buffer = message.data();
-
-    std::cout << "SENDING MSG: " << std::to_string(data.header.type) << std::endl;
 
     // Send data
     ssize_t bytes_send =
@@ -215,7 +209,6 @@ void UDPClass::handle_send () {
         if (this->stop_send == true)
             break;
 
-        //std::cout << "getting front" << std::endl;
         // Load message to send from queue front
         auto& to_send = this->messages_to_send.front();
 
@@ -241,6 +234,7 @@ void UDPClass::handle_send () {
 void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
     // Timeout happened when waiting for REPLY -> end connection
     if (event == TIMEOUT && this->wait_for_reply == true) {
+        OutputClass::out_err_intern("Timeout for server response, ending connection");
         send_priority_bye();
     }
     else {
@@ -251,7 +245,6 @@ void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
 
             // There is/are msgs in queue, but not send yet, ignore and avoid their resend count decrement
             if (event == TIMEOUT && front_msg.first.sent == true) { // Timeout event occured
-                std::cout << "TIMEOUT EVENT" << std::endl;
                 // Decrease front msg resend count
                 if (front_msg.second > 1) {
                     // Decrease resend count
@@ -261,13 +254,14 @@ void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
                     // Reset sent flag
                     front_msg.first.sent = false;
                 }
-                else // No reply from server -> end connection
+                else { // No reply from server -> end connection
+                    OutputClass::out_err_intern("No response from server, ending connection");
                     session_end();
+                }
             }
             else if (event == CONFIRMATION) { // Confirmation event occured
                 if (front_msg.first.header.msg_id == confirm_to_id) { // Pop it from queue and continue with another message (if any)
                     // Confirmed BYE msg -> end connection
-                    std::cout << "MESSAGE CONFIRMED" << confirm_to_id << std::endl;
                     if (front_msg.first.header.type == BYE)
                         session_end();
                     else {
@@ -307,13 +301,8 @@ void UDPClass::handle_receive () {
                 thread_event(TIMEOUT);
             else if (bytes_received < 0) // Output error
                 OutputClass::out_err_intern("Error while receiving data from server");
-            else { // 0 <= size < 3 -> send ERR, BYE and end connection
-                std::string err_msg = "Unsufficient lenght of message received";
-                OutputClass::out_err_intern(err_msg);
-                // Invalid message from server -> end connection
-                send_err(err_msg);
-                send_priority_bye();
-            }
+            else // 0 <= size < 3 -> send ERR, BYE and end connection
+                switch_to_error("Unsufficient lenght of message received");
             // No reason for processing unsufficient-size response, repeat
             continue;
         }
@@ -324,15 +313,12 @@ void UDPClass::handle_receive () {
         std::memcpy(&data.header, in_buffer, sizeof(UDP_Header));
         // Convert msg_id to correct indian
         data.header.msg_id = htons(data.header.msg_id);
-        std::cout << "value after htons " << data.header.msg_id << std::endl;
 
         if (data.header.type == CONFIRM) { // Confirmation from server event
             thread_event(CONFIRMATION, data.header.msg_id);
-            std::cout << "value after confirmation event " << data.header.msg_id << std::endl;
             continue;
         }
 
-        std::cout << "value before sending confirm " << data.header.msg_id << std::endl;
         // Send confirmation to the server before processing received message
         send_confirm(data.header.msg_id);
 
@@ -340,17 +326,14 @@ void UDPClass::handle_receive () {
             // Ignore and continue as already processed
             continue;
 
-        // Store and mark as proceeded msg ID
+        // Store and mark as proceeded msg
         processed_msgs.push_back(data.header.msg_id);
 
         try {
             deserialize_msg(data, in_buffer, bytes_received);
         } catch (const std::logic_error& e) {
-            // Output error and avoid further message processing
-            OutputClass::out_err_intern(e.what());
             // Invalid message from server -> end connection
-            send_err(e.what());
-            send_priority_bye();
+            switch_to_error(e.what());
             continue;
         }
 
@@ -443,7 +426,6 @@ void UDPClass::get_msg_part (const char* input, size_t& input_pos, size_t max_si
 }
 
 void UDPClass::deserialize_msg (UDP_DataStruct& out_str, const char* msg, size_t total_size) {
-    std::cout << "DESERIALIZING MSG " << std::to_string(out_str.header.type) << std::endl;
     size_t msg_pos = sizeof(UDP_Header);
     switch (out_str.header.type) {
         case REPLY:
@@ -491,11 +473,6 @@ std::string UDPClass::get_str_msg_id (uint16_t msg_id) {
 /***********************************************************************************/
 std::string UDPClass::convert_to_string (UDP_DataStruct& data) {
     std::string msg(1, static_cast<char>(data.header.type));
-    /*
-        todo:
-            confirm id je asi spatne
-            ta binarka musi byt executable (chmod +x ig)
-    */
     switch (data.header.type) {
         case CONFIRM:
             msg += get_str_msg_id(data.ref_msg_id);
@@ -523,8 +500,13 @@ std::string UDPClass::convert_to_string (UDP_DataStruct& data) {
 }
 /***********************************************************************************/
 UDP_Header UDPClass::create_header (uint8_t type) {
-    return (UDP_Header){
+    // Create header for requested message
+    UDP_Header header = (UDP_Header){
         .type   = type,
-        .msg_id = (this->msg_id)++
+        .msg_id = this->msg_id
     };
+    // Avoid useless msg_id incrementation when sending CONFIRM
+    if (type != CONFIRM)
+        ++(this->msg_id);
+    return header;
 }

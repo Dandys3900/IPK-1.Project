@@ -6,9 +6,9 @@ ClientClass* client = nullptr;
 // Global variable for notifying main function about EOF
 bool eof_event = false;
 
-void handle_ctrlc_signal (int sig_val /*not used*/) {
-    std::cout << "ctrl+c signal received" << std::endl;
-    client->send_priority_bye();
+void signalHandler (int sig_val) {
+    if (sig_val == SIGINT)
+        client->send_priority_bye();
 }
 
 void handle_user_input () {
@@ -22,15 +22,18 @@ void handle_user_input () {
     std::vector<std::string> line_vec;
 
     while (std::cin.eof() == false && client->stop_program() == false) {
-        int result = poll(fds, 1, /*waiting timeout [ms]*/ 100);
+        int result = poll(fds, 1, /*waiting timeout [ms]*/100);
         if (result > 0) {
-            if (fds[0].revents & POLLIN) { // Input is available, read it
+            if (fds[0].revents & (POLLIN | POLLHUP)) { // Input is available, read it
                 std::getline(std::cin, user_line);
-                std::cout << "LOADED LINE: " << user_line << std::endl;
+
+                // Skip empty line
+                if (user_line.empty() == true)
+                    continue;
 
                 if (user_line.c_str()[0] == '/') {
                     // Command - load words from user input line
-                    client->get_line_words(user_line, line_vec);
+                    client->split_to_vec(user_line, line_vec, ' ');
                     if (line_vec.at(0) == std::string("/auth") && line_vec.size() == 4)
                         client->send_auth(line_vec.at(1), line_vec.at(3), line_vec.at(2));
                     else if (line_vec.at(0) == std::string("/join") && line_vec.size() == 2)
@@ -97,7 +100,7 @@ int main (int argc, char *argv[]) {
     TCPClass tcpClient(data_map);
     UDPClass udpClient(data_map);
 
-    // Decide which user to use
+    // Decide which client use
     if (strcmp(client_type, "tcp") == 0)
         client = &tcpClient;
     else
@@ -112,7 +115,7 @@ int main (int argc, char *argv[]) {
     }
 
     // Set interrput signal handling - CTRL+C
-    std::signal(SIGINT, handle_ctrlc_signal);
+    std::signal(SIGINT, signalHandler);
 
     // Create thread for user input
     std::jthread user_input = std::jthread(handle_user_input);

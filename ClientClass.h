@@ -53,7 +53,7 @@ class ClientClass {
             return this->cond_var;
         }
 
-        void get_line_words (std::string line, std::vector<std::string>& words_vec) {
+        void split_to_vec (std::string line, std::vector<std::string>& words_vec, char delim) {
             // Initially clear vector
             words_vec.clear();
 
@@ -62,7 +62,7 @@ class ClientClass {
             std::string line_word;
 
             // Insert each word to vector
-            while (ss >> line_word)
+            while(getline(ss, line_word, delim))
                 words_vec.push_back(line_word);
         }
 
@@ -107,6 +107,10 @@ class ClientClass {
                 case BYE:
                     // Switch to end state
                     cur_state = S_END;
+                    return true;
+                case ERR:
+                    // Switch to error state
+                    cur_state = S_ERROR;
                     return true;
                 default:
                     return false;
