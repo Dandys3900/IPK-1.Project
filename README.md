@@ -268,19 +268,70 @@ ERROR: Compulsory values are missing
         ```
 
 ### Test reakce na nedoručenou `REPLY` zprávu pro `AUTH` zprávu (**UDP Specific**)
-* Popis testu:
-* Důvody testování:
-* Způsob testování:
+* Popis testu: Ověření, že klient korektně reaguje na nedodanou, ovšem vyžadovanou, `REPLY` zprávu
+* Důvody testování: Charakteristika UDP protokolu, jeden z možných edge-casů
+* Způsob testování: Testovací server [mockUDPserver.py][mockudp-file-ref] při reakci na přijatou `AUTH` nezašle klientem očekávanou `REPLY` zprávu
+* Očekávaný výstup:
+    * Tisk chybové zprávy oznamující že server nereaguje a ukončení spojení ve formě zaslané `BYE` zprávy
+* Skutečný výstup:
+    * UDP:
+        ```
+        ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
+        └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
+        /auth tom tom tom
+        ERR: Timeout for server response, ending connection
+        ERR: No response from server, ending connection
+        ```
 
 ### Test reakce na negativní `REPLY` zprávu pro `AUTH` zprávu
-* Popis testu:
-* Důvody testování:
-* Způsob testování:
+* Popis testu: Ověření a demonstrace chování klienta na negativní `REPLY` zprávu pro zaslanou `AUTH` zprávu
+* Důvody testování: Jedna z běžných situací, které v rámci užívání mohou nastat
+* Způsob testování: Uživatel zašle `AUTH` na kterou přijímá negativní `REPLY` odpověď
+* Očekávaný výstup:
+    * Tisk přijaté `REPLY` zprávy, na kterou může uživatel reagovat několika způsoby:
+        * Ukončení spojení
+        * Opětovnému zaslání `AUTH` zprávy
+* Skutečný výstup:
+    * UDP:
+        ```
+        ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
+        └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
+        /auth tom tom tom
+        Failure: nene
+        -- MOZNOST PRO UZIVATELE ROZHODNOUT SE, CO DAL --
+        ```
+    * TCP:
+        ```
+        ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
+        └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
+        /auth tom tom tom
+        Failure: nene
+        -- MOZNOST PRO UZIVATELE ROZHODNOUT SE, CO DAL --
+        ```
 
-### Test reakce na neočekávanou zprávu ve `OPEN` stavu
-* Popis testu:
-* Důvody testování:
-* Způsob testování:
+### Test reakce na neočekávanou zprávu v `OPEN` stavu
+* Popis testu: Ověření reakce klienta na neočekávanou zprávu pro jeho aktuální stav
+* Důvody testování: Jedna z běžných situací, které v rámci užívání mohou nastat
+* Způsob testování: Klient úspěšně naváže spojení se serverem a přejde do `OPEN` stavu, ve kterém od serveru přijímá neočekávanou a tedy chybnou `AUTH` zprávu
+Očekávaný výstup:
+    * Tisk přijaté `REPLY` zprávy, následované výpisem chybové zprávy informující o přijetí zprávy nevalidní pro aktuální klientův stav a následné přepnutí do `ERROR` stavu, zaslání `BYE` a ukončení spojení
+* Skutečný výstup:
+    * UDP:
+        ```
+        ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
+        └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
+        /auth tom tom tom
+        Success: jojo
+        ERR: Unknown message type provided
+        ```
+    * TCP:
+        ```
+        ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
+        └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
+        /auth tom tom tom
+        Success: jojo
+        ERR: Unknown message type provided
+        ```
 
 ### Test reakce na přijetí vícera zpráv najednou (**TCP Specific**)
 * Popis testu: Ověření, že je klient schopen rozeznat a zpracovat vícero zpráv obsažených v bufferu z funkce *recv()*
@@ -332,3 +383,6 @@ ERROR: Compulsory values are missing
 V rámci tohoto projektu jsem žádná rozšíření funkcionality nad rámec zadání **neprováděl**.
 
 ## Zdroje <a name="source"></a>
+"User Datagram Protocol", Wikipedia. Dostupné z: https://cs.wikipedia.org/wiki/User_Datagram_Protocol (cit. 2024-03-30)
+
+"Transmission Control Protocol", Wikipedia. Dostupné z: https://cs.wikipedia.org/wiki/Transmission_Control_Protocol (cit. 2024-03-30)
