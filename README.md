@@ -225,7 +225,7 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-^C                                                              -> \xff\x00\x00 [BYE Message]
+        ^C                                                      -> \xff\x00\x00 [BYE Message]
                                                                 <- \x00\x00\x00 [CONFIRM Message]
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ echo $?
