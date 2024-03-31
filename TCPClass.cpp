@@ -373,6 +373,10 @@ void TCPClass::deserialize_msg(TCP_DataStruct& out_str) {
             out_str.display_name = this->line_vec.at(2);
             out_str.message = load_rest(4);
             break;
+        case BYE: // BYE\r\n
+            break;
+        case AUTH: // Why would server send AUTH message to client?
+            throw std::logic_error("Unexpected message received");
         default:
             throw std::logic_error("Unknown message type provided");
     }
@@ -393,7 +397,7 @@ std::string TCPClass::convert_to_string(TCP_DataStruct &data) {
     case MSG: // MSG FROM {DisplayName} IS {MessageContent}\r\n
         msg = "MSG FROM " + data.display_name + " IS " + data.message + "\r\n";
         break;
-    case ERR: // ERROR FROM {DisplayName} IS {MessageContent}\r\n
+    case ERR: // ERR FROM {DisplayName} IS {MessageContent}\r\n
         msg = "ERR FROM " + data.display_name + " IS " + data.message + "\r\n";
         break;
     case BYE: // BYE\r\n

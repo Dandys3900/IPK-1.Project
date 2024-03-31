@@ -25,7 +25,7 @@ class TCPClass : public ClientClass {
         void send_err (std::string err_msg);
         void handle_send ();
         void handle_receive ();
-         /* Helper methods */
+        /* Helper methods */
         void switch_to_error (std::string err_msg);
         MSG_TYPE get_msg_type (std::string first_msg_word);
         std::string convert_to_string (TCP_DataStruct& data);
@@ -35,9 +35,8 @@ class TCPClass : public ClientClass {
     public:
         TCPClass (std::map<std::string, std::string> data_map);
         ~TCPClass () {};
-
+        // Inherited methods from parent ClientClass class
         void open_connection () override;
-
         void send_auth (std::string user_name, std::string display_name, std::string secret) override;
         void send_msg (std::string msg) override;
         void send_join (std::string channel_id) override;

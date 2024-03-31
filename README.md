@@ -25,9 +25,9 @@ Dle mého názoru je cestou k tomuto cíli vysvětlení dvou základních transp
 UDP je jedním z hlavních komunikačních protokolů v rámci internetového protokolového souboru.
 Charakteristikou tohoto protokolu je jeho nespolehlivost doručení a současně nemožnost ověřit, zda-li data došla zamýšlenému příjemci.
 
-Proto bylo i v rámci tohoto projektu zavedeno řešení těchto problémů. Pro ověření přijetí zprávz slouží zpráva CONFIRM, kterou je přijemce povinnen po každém úspěšném přijetí odeslat odesílateli a která obsahuje unikátní identifikátor zprávy (viz. níže). Pro vyřešení nespolehlivosti má uživatel možnost volby časového limitu pro přijetí CONFIRM zprávy, v případě, kdy dojde k překročení časového limitu, je zpráva považována na ztracenou a případně poslána znovu nebo je spojení ukončeno.
+Proto bylo i v rámci tohoto projektu zavedeno řešení těchto problémů. Pro ověření přijetí zprávy slouží zpráva CONFIRM, kterou je přijemce povinnen po každém úspěšném přijetí odeslat odesílateli a která obsahuje unikátní identifikátor zprávy (viz. níže). Pro vyřešení nespolehlivosti má uživatel možnost volby časového limitu pro přijetí CONFIRM zprávy, v případě, kdy dojde k překročení časového limitu, je zpráva považována na ztracenou a případně poslána znovu nebo je spojení ukončeno.
 
-Dalším potencionálním problémem v rámci tohoto projektu při použití UDP protokolu mohou být duplikace přijatých zpráv, kvůli povaze tohoto protokolu se totiž velmi jednoduše může stát, že odesílatel nazná, že zpráva byla ztracena při přenosu a pošle ji znovu a příjemci náhle dorazí dvě duplicitní zprávy. Toto je řešeno použitím vektoru již přijatých zpráv, který zajisťuje, že se na duplicitní zprávu zareaguje pouze jednou a jakékoliv opakované přijetí je posléze klientem ignorováno.
+Dalším potencionálním problémem v rámci tohoto projektu při použití UDP protokolu mohou být duplikace přijatých zpráv. Kvůli povaze tohoto protokolu se totiž velmi jednoduše může stát, že odesílatel nazná, že zpráva byla ztracena při přenosu a pošle ji znovu a příjemci náhle dorazí dvě duplicitní zprávy. Toto je řešeno použitím vektoru již přijatých zpráv obsahující unikátní identifikátory zpráv, který zajisťuje, že se na duplicitní zprávu zareaguje pouze jednou a jakékoliv opakované přijetí je posléze klientem ignorováno.
 
 Jak je ovšem možné od sebe jednotlivé zprávy rozlišit? Odpověď skryvá hlavička, která je obsažena v každé přijaté a odeslané zprávě. Tato hlavička vypadá následovně:
 ```
@@ -51,12 +51,12 @@ Důvod pro používání tohoto protokolu v praxi je zejména nízká latence a 
 ## **TCP (Transmission Control Protocol)**
 TCP je dalším z řady hlavním protokolů v rámci internetového protokolového souboru. Jeho hlavní výhodou je, v kontrastu s UDP, spolehlivost doručení a celkově nižší potřeba režie na straně účastníků komunikace. Narozdíl od UDP totiž TCP protokol před samotným zahájením přenosu, provede mezi oběmi zúčast stranami tzv. trojcestný handshaking, v rámci kterého dojde k nastavení a navázání spojení mezi oběmi stranami. Na druhou stranu může právě důkladná kontrola způsobit výrazné zvýšení latence přenosu, což je například pro realtimové aplikace pro živé vysílání vyloženě překážkou.
 
-Díky tomu za nás tento protokol řeší drtivou většinu možných přenosových problémů, od potvrzování přijetí, zajištění správného pořadí doručení až po opětovného zasílání dat v případě ztráty. A tedy odpadá potřeba implementovat hlavičky pro zasílané zprávy.
+Díky tomu, že za nás tento protokol řeší drtivou většinu možných přenosových problémů, od potvrzování přijetí, zajištění správného pořadí doručení až po opětovného zasílání dat v případě ztráty, odpadá potřeba implementovat hlavičky pro zasílané zprávy.
 
 ## Struktura a implementace programu <a name="struct"></a>
 Program je logicky členěn na jednotlivé soubory a funkce/metody v rámci souborů.
 
-Na začátku každého běhu aplikace dochází ke načtení a validovaní poskytnutých CLI (Command LineIinterface) argumentů a jejich nálsedné vložení do neseřazené mapy, ze které si následně konstruktor příslušné třídy, podle uživatelem zvoleného tzpu spojení, tyto data načte a inicializuje své atributy.
+Na začátku každého běhu aplikace dochází ke načtení a validovaní poskytnutých CLI (Command Line Interface) argumentů a jejich následné vložení do neseřazené mapy, ze které si následně konstruktor příslušné třídy, podle uživatelem zvoleného typu spojení, tyto data načte a inicializuje své atributy.
 
 Ukázka načtení a vložení argumentu v [hlavním souboru][main-file-ref], udávajícího komunikační port serveru, do mapy:
 ```
@@ -70,7 +70,7 @@ for (int index = 1; index < argc; ++index) {
 }
 ```
 
-Následuje tvorba instance samotného komunikačního klienta, dle uživatele zvolného (`UDP/TCP`) typu komunikace, který je uložen do globálního ukazatele typu `ClientClass`, zobrazeno zde:
+Následuje tvorba instance samotného komunikačního klienta, dle uživatele zvoleného (`UDP/TCP`) typu komunikace, který je uložen do globálního ukazatele typu `ClientClass`, zobrazeno zde:
 ```
 TCPClass tcpClient(data_map);
 UDPClass udpClient(data_map);
@@ -97,12 +97,12 @@ try {
 }
 ```
 
-V rámci snahy u úspěšné navázání spojení se server dochází k vytvoření dvou pomocných [jthread](https://en.cppreference.com/w/cpp/thread/jthread) vláken, představených v rámci standardu C++20. Jmenovitě `send_thread` a `recv_thread` deklarovaných v [ClientClass][abst-file-ref].
+V rámci snahy o úspěšné navázání spojení se serverem dochází k vytvoření dvou pomocných [jthread](https://en.cppreference.com/w/cpp/thread/jthread) vláken, představených v rámci standardu C++20. Jmenovitě `send_thread` a `recv_thread`, deklarovaných v [ClientClass][abst-file-ref].
 Tyto vlákna se starají o zpracování zpráv přijatých **ze serveru** a o odesílání zpráv **na server**.
 
-Určitou výzvu při implementaci představovalo zajištění mezivláknové synchronizace a zabránění konfliktů při čtení a úprav vnitřních hodnot třídy, zejména pak fronty zpráv čekající na odeslání `messages_to_send`. Pro zajištění tohoto jsou v programu použity [mutexy](https://en.cppreference.com/w/cpp/thread/mutex), [podmínečné proměnné](https://en.cppreference.com/w/cpp/thread/condition_variable) (anglicky conditional variables) a [atomické proměnné](https://en.cppreference.com/w/cpp/atomic/atomic).
+Určitou výzvu při implementaci představovalo zajištění mezivláknové synchronizace a zabránění konfliktů při čtení a zápisu do vnitřních attributů třídy, zejména pak fronty zpráv čekající na odeslání `messages_to_send`. Pro zajištění tohoto jsou v programu použity [mutexy](https://en.cppreference.com/w/cpp/thread/mutex), [podmínečné proměnné](https://en.cppreference.com/w/cpp/thread/condition_variable) (anglicky conditional variables) a [atomické proměnné](https://en.cppreference.com/w/cpp/atomic/atomic).
 
-Příklad použití mutexu při práci s frontou zpráv `messages_to_send` v [TCPClass][tcp-file-ref], tak aby jiné vlákno nemohlo měnit aktuální vrchol této fronty či jeho hodnoty:
+Příklad použití mutexu při práci s frontou zpráv `messages_to_send` v [TCPClass][tcp-file-ref], který zabraňuje konfliktnímu čtení a zápisu do fronty:
 ```
 { // Mutex lock scope
     std::unique_lock<std::mutex> lock(this->editing_front_mutex);
@@ -118,9 +118,10 @@ Po úspěšném spuštění klienta je jeho chování závislé na zprávách p�
 Možností pro ukončení programu je několik:
 1. Uživatel se rozhodne ukončit program zasláním interrupt signálu (`CTRL+c`)
 2. Konec uživatelského vstupu (`EOF`)
-3. Klient podle své vnitřní logiky rozhodne u ukončení programu (vyvolání metody *session_end();* )
+3. Klient podle své vnitřní logiky rozhodne u ukončení programu (vyvolání metody *session_end();*)
+4. Klient obdrží od serveru `BYE` zprávu
 
-Určitou výzvu pro výše zmíněné představovala skutečnost, že rozhodnutí o ukončení programu je možné invokovat z různých částí programu ([main.cpp][main-file-ref], [TCPClass.cpp][tcp-file-ref] a [UDPClass.cpp][udp-file-ref]). Pro všechny případy je ovšem nezbytné korektně ukončit běžící vlákna přičemž nemůže dojít k ukončení hrubou silou pokud jsou vlákna v procesu kdy je potřeba doposlat zbylé zprávy případně si na ně vyžádat odpověď, uvolnit alokované zdroje a ukončit program s příslušnou návratovou hodnotou. Tohoto bylo dosaženo použitím podmínečné proměnné v rámci hlavního programu funkce, která čeká dokuď invokována pomocí *notify_one()* funkce společně s kombinací metody *wait_for_threads()* definované v [ClientClass][abst-file-ref].
+Určitou výzvu pro výše zmíněné představovala skutečnost, že rozhodnutí o ukončení programu je možné invokovat z různých částí programu ([main.cpp][main-file-ref], [TCPClass.cpp][tcp-file-ref] a [UDPClass.cpp][udp-file-ref]). Pro všechny případy je ovšem nezbytné korektně ukončit běžící vlákna, přičemž nemůže dojít k ukončení hrubou silou, pokud jsou vlákna v procesu, kdy je potřeba doposlat zbylé zprávy případně si na ně vyžádat odpověď, uvolnit alokované zdroje a ukončit program s příslušnou návratovou hodnotou. Tohoto bylo dosaženo použitím podmínečné proměnné deklarované v [ClientClass][abst-file-ref] v rámci hlavního programu funkce, která efektivně brání hlavní funkci v ukočení celého programu dokuď není tato proměnná "odemčena" invokováním její vnitřní funkce *notify_one()* společně s kombinací metody *wait_for_threads()* definované v [ClientClass][abst-file-ref].
 
 Ukázka tohoto mechanismu v [main.cpp][main-file-ref]:
 ```
@@ -144,9 +145,9 @@ Uskutečnění níže popsaných testů probíhalo v domácím prostředí v rá
 1. Notebook hostující testovanou aplikaci `ipk24chat-client`
 2. Kabelový modem [CBN CH7465](https://pics.vodafone.cz/2/kabel/compal_ch7465lg/Compal_CH7465_podrobnynavod.pdf)
 
-Jedná se o notebook [Samsung Galaxy Book2 Pro 360](https://www.samsung.com/hk_en/computers/galaxy-book/galaxy-book2-pro-360-15inch-i7-16gb-1tb-np950qed-ka1hk/#specs), model **950QED**.
+V případě notebooku se jednalo o [Samsung Galaxy Book2 Pro 360](https://www.samsung.com/hk_en/computers/galaxy-book/galaxy-book2-pro-360-15inch-i7-16gb-1tb-np950qed-ka1hk/#specs), model **950QED**.
 
-#### Systémové detaily
+#### Systémové detaily zařízení
 1. **Název operačního systému:** Microsoft Windows 11 Home
 2. **Verze operačního systému:** 10.0.22631 Build 22631
 3. **Výrobce operačního systému:** Microsoft Corporation
@@ -159,7 +160,7 @@ Jedná se o notebook [Samsung Galaxy Book2 Pro 360](https://www.samsung.com/hk_e
     * **IP address(es):**  192.168.0.122
 
 #### Testovací prostředí
-Testování probíhalo v rámci hostujícího notebooku v prostředí Windows Subsystem for Linux `WSL`, ve které byla spuštěna Linuxová distribuce **Kali Linux** (*Release:* 2023.4; *Codename:* kali-rolling). Pro simulování druhé účastníka komunikace, tedy serveru, slouží dva Python skripty [mockTCPserver.py][mocktcp-file-ref] a [mockUDPserver.py][mockudp-file-ref].
+Testování probíhalo v rámci hostujícího notebooku v prostředí Windows Subsystem for Linux (`WSL`), ve které byla spuštěna Linuxová distribuce **Kali Linux** (*Release:* 2023.4; *Codename:* kali-rolling). Pro simulování druhého účastníka komunikace, tedy serveru, posloužily dva Python skripty [mockTCPserver.py][mocktcp-file-ref] a [mockUDPserver.py][mockudp-file-ref].
 
 **Oba výše uvedené testovací skripty byly v průběhu testování upravovány podle povahy a potřeb jednotlivých testů a zároveň pokud nebude v rámci jednotlivých testů uvedeno jinak, je za testovací prostředí implicitně považováno výše uvedené prostředí.**
 
@@ -183,9 +184,9 @@ ERROR: Compulsory values are missing
 ```
 
 ### Test nevalidní hodnoty pro hostname
-* Popis testu: Uživatel zadá nesprávnou hodnotu pro název serveru
+* Popis testu: Uživatel zadá neexistující název serveru
 * Důvody testování: Ověření schopnosti programu validovat uživatelské vstupy
-* Způsob testování: Uživatel zadá špatnou hodnotu
+* Způsob testování: Uživatel zadá špatnou hodnotu pro název serveru
 * Vstupy:
     * `./ipk24chat-client -t udp -s NONSENSE -p 4567`
     * `./ipk24chat-client -t tcp -s NONSENSE -p 4567`
@@ -224,8 +225,8 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-        ^C
-
+        ^C                                                                  -> \xff\x00\x00 [BYE Message]
+                                                                            <- \x00\x00\x00 [CONFIRM Message]
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ echo $?
         0
@@ -234,8 +235,7 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        ^C
-
+        ^C                                                                  -> BYE\r\n
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ echo $?
         0
@@ -252,7 +252,8 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-
+                                                                            -> \xff\x00\x00 [BYE Message]
+                                                                            <- \x00\x00\x00 [CONFIRM Message]
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ echo $?
         0
@@ -261,7 +262,7 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-
+                                                                            -> BYE\r\n
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ echo $?
         0
@@ -278,9 +279,10 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-        /auth tom tom tom
-        ERR: Timeout for server response, ending connection
-        ERR: No response from server, ending connection
+        /auth tom tom tom                                                   -> \x02\x00\x00tom\x00tom\x00tom\x00 [AUTH Message]
+                                                                            <- \x00\x00\x00 [CONFIRM Message]
+        ERR: Timeout for server response, ending connection                 -> \xff\x00\x01 [BYE Message]
+                                                                            <- \x00\x00\x01 [CONFIRM Message]
         ```
 
 ### Test reakce na negativní `REPLY` zprávu pro `AUTH` zprávu
@@ -296,15 +298,18 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-        /auth tom tom tom
-        Failure: nene
+        /auth tom tom tom                                                   -> \x02\x00\x00tom\x00tom\x00tom\x00 [AUTH Message]
+                                                                            <- \x00\x00\x00 [CONFIRM Message]
+                                                                            <- \x01\x00\x00\x00\x00\x00nene\x00 [NEGATIVE REPLY]
+        Failure: nene                                                       -> \x00\x00\x00 [CONFIRM Message]
         -- MOZNOST PRO UZIVATELE ROZHODNOUT SE, CO DAL --
         ```
     * TCP:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom
+        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                            <- REPLY NOK IS nene\r\n [NEGATIVE REPLY]
         Failure: nene
         -- MOZNOST PRO UZIVATELE ROZHODNOUT SE, CO DAL --
         ```
@@ -320,17 +325,24 @@ Očekávaný výstup:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-        /auth tom tom tom
-        Success: jojo
-        ERR: Unknown message type provided
+        /auth tom tom tom                                                   -> \x02\x00\x00tom\x00tom\x00tom\x00 [AUTH Message]
+                                                                            <- \x00\x00\x00 [CONFIRM Message]
+                                                                            <- \x01\x00\x00\x01\x00\x00jojo\x00 [POSITIVE REPLY]
+        Success: jojo                                                       -> \x00\x00\x00 [CONFIRM Message]
+                                                                            <- \x02\x00\x01tom\x00tom\x00tom\x00 [(Unexpected) AUTH Message]
+                                                                            -> \x00\x00\x01 [CONFIRM Message]
+        ERR: Unexpected message received                                    -> \xfe\x00\x01tom\x00Unexpected message received\x00 [ERROR Message]
+                                                                            <- \x00\x00\x01 [CONFIRM Message]
         ```
     * TCP:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom
-        Success: jojo
-        ERR: Unknown message type provided
+        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                            <- REPLY OK IS jojo\r\n [POSITIVE REPLY]
+        Success: jojo                                                       <- AUTH tom AS tom USING tom\r\n [AUTH Message]
+        ERR: Unexpected message received                                    -> ERR FROM tom IS Unexpected message received\r\n [ERROR Message]
+                                                                            -> BYE\r\n
         ```
 
 ### Test reakce na přijetí vícera zpráv najednou (**TCP Specific**)
@@ -344,7 +356,8 @@ Očekávaný výstup:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom
+        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                            <- REPLY OK IS VSE JE OK\r\nMSG FROM tom IS ahoj svete\r\n [POSITIVE REPLY + MSG Message]
         Success: VSE JE OK
         tom: ahoj svete
         ```
@@ -360,7 +373,10 @@ Očekávaný výstup:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom
+        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                            <- REPLY OK I
+                                                                            ...wait 2 secs...
+                                                                            S VSE JE OK\r\n
         Success: VSE JE OK
         ```
 
@@ -375,14 +391,16 @@ Očekávaný výstup:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom
+        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                            <- RePlY Ok iS VsE je OK\r\n [POSITIVE REPLY Message]
         Success: VsE je OK
         ```
 
 ## Rozšíření <a name="bonus"></a>
 V rámci tohoto projektu jsem žádná rozšíření funkcionality nad rámec zadání **neprováděl**.
 
-## Zdroje <a name="source"></a>
-"User Datagram Protocol", Wikipedia. Dostupné z: https://cs.wikipedia.org/wiki/User_Datagram_Protocol (cit. 2024-03-30)
+## Bibliografie <a name="source"></a>
 
-"Transmission Control Protocol", Wikipedia. Dostupné z: https://cs.wikipedia.org/wiki/Transmission_Control_Protocol (cit. 2024-03-30)
+Přispěvatelé Wikipedie, User Datagram Protocol [online], Wikipedie: Otevřená encyklopedie, c2023, Datum poslední revize 18. 11. 2023, 09:48 UTC, [citováno 31. 03. 2024]. Dostupné z https://cs.wikipedia.org/w/index.php?title=User_Datagram_Protocol&oldid=23387592
+
+Přispěvatelé Wikipedie, Transmission Control Protocol [online], Wikipedie: Otevřená encyklopedie, c2024, Datum poslední revize 31. 01. 2024, 16:40 UTC, [citováno 31. 03. 2024]. Dostupné z https://cs.wikipedia.org/w/index.php?title=Transmission_Control_Protocol&oldid=23611088>

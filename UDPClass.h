@@ -61,9 +61,8 @@ class UDPClass : public ClientClass {
     public:
         UDPClass (std::map<std::string, std::string> data_map);
         ~UDPClass () {};
-
+        // Inherited methods from parent ClientClass class
         void open_connection () override;
-
         void send_auth (std::string user_name, std::string display_name, std::string secret) override;
         void send_msg (std::string msg) override;
         void send_join (std::string channel_id) override;

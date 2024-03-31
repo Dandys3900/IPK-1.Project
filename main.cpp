@@ -41,7 +41,7 @@ void handle_user_input () {
                     else if (line_vec.at(0) == std::string("/rename") && line_vec.size() == 2)
                         client->send_rename(line_vec.at(1));
                     else if (line_vec.at(0) == std::string("/help") && line_vec.size() == 1)
-                        OutputClass::out_help();
+                        OutputClass::out_help_cmds();
                     else if (std::cin.eof() == false) // Output error and continue
                         OutputClass::out_err_intern("Unknown command or unsufficinet number of command params provided");
                 }

@@ -171,7 +171,7 @@ void UDPClass::send_message (UDP_DataStruct data) {
             this->high_priority = false;
         }
         // Add new message to the queue with given resend count
-        this->messages_to_send.push({data, this->recon_attempts});
+        this->messages_to_send.push({data, this->recon_attempts + 1/*initial try*/});
     }
 }
 /***********************************************************************************/
@@ -451,6 +451,8 @@ void UDPClass::deserialize_msg (UDP_DataStruct& out_str, const char* msg, size_t
             break;
         case BYE:
             break;
+        case AUTH: // Why would server send AUTH message to client?
+            throw std::logic_error("Unexpected message received");
         default:
             throw std::logic_error("Unknown message type provided");
     }

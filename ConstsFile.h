@@ -40,7 +40,7 @@ enum MSG_TYPE : uint8_t {
     BYE      = 0xFF
 };
 
-// Enum FSM states
+// Enum for client states
 enum FSM_STATE : uint8_t {
     S_START = 0,
     S_AUTH,
