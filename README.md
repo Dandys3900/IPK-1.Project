@@ -12,7 +12,7 @@
 
 ## Obsah
 1. [Teorie](#teorie)
-2. [Struktura programu](#struct)
+2. [Struktura a implementace programu](#struct)
 3. [Testování](#test)
 4. [Rozšíření](#bonus)
 5. [Zdroje](#source)
