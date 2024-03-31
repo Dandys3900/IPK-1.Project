@@ -164,6 +164,8 @@ Testování probíhalo v rámci hostujícího notebooku v prostředí Windows Su
 
 **Oba výše uvedené testovací skripty byly v průběhu testování upravovány podle povahy a potřeb jednotlivých testů a zároveň pokud nebude v rámci jednotlivých testů uvedeno jinak, je za testovací prostředí implicitně považováno výše uvedené prostředí.**
 
+** Symbol `->` značí příchozí zprávu na server a symbol `<-` naopak značí odchozí zprávu z serveru ke klientovi**
+
 ### Test chybějícího povinného argumenty programu
 * Popis testu: Uživatel vynechá povinný argument spouštění programu *-t*, pro specifikaci typu komunikačního protokolu
 * Důvody testování: Ověření schopnosti programu validovat uživatelské vstupy
@@ -225,8 +227,8 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-        ^C                                                                  -> \xff\x00\x00 [BYE Message]
-                                                                            <- \x00\x00\x00 [CONFIRM Message]
+^C                                                              -> \xff\x00\x00 [BYE Message]
+                                                                <- \x00\x00\x00 [CONFIRM Message]
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ echo $?
         0
@@ -235,7 +237,7 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        ^C                                                                  -> BYE\r\n
+        ^C                                                      -> BYE\r\n
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ echo $?
         0
@@ -252,8 +254,8 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-                                                                            -> \xff\x00\x00 [BYE Message]
-                                                                            <- \x00\x00\x00 [CONFIRM Message]
+                                                                -> \xff\x00\x00 [BYE Message]
+                                                                <- \x00\x00\x00 [CONFIRM Message]
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ echo $?
         0
@@ -262,7 +264,7 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-                                                                            -> BYE\r\n
+                                                                -> BYE\r\n
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ echo $?
         0
@@ -279,10 +281,10 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-        /auth tom tom tom                                                   -> \x02\x00\x00tom\x00tom\x00tom\x00 [AUTH Message]
-                                                                            <- \x00\x00\x00 [CONFIRM Message]
-        ERR: Timeout for server response, ending connection                 -> \xff\x00\x01 [BYE Message]
-                                                                            <- \x00\x00\x01 [CONFIRM Message]
+        /auth tom tom tom                                       -> \x02\x00\x00tom\x00tom\x00tom\x00 [AUTH Message]
+                                                                <- \x00\x00\x00 [CONFIRM Message]
+        ERR: Timeout for server response, ending connection     -> \xff\x00\x01 [BYE Message]
+                                                                <- \x00\x00\x01 [CONFIRM Message]
         ```
 
 ### Test reakce na negativní `REPLY` zprávu pro `AUTH` zprávu
@@ -298,18 +300,18 @@ ERROR: Compulsory values are missing
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-        /auth tom tom tom                                                   -> \x02\x00\x00tom\x00tom\x00tom\x00 [AUTH Message]
-                                                                            <- \x00\x00\x00 [CONFIRM Message]
-                                                                            <- \x01\x00\x00\x00\x00\x00nene\x00 [NEGATIVE REPLY]
-        Failure: nene                                                       -> \x00\x00\x00 [CONFIRM Message]
+        /auth tom tom tom                                       -> \x02\x00\x00tom\x00tom\x00tom\x00 [AUTH Message]
+                                                                <- \x00\x00\x00 [CONFIRM Message]
+                                                                <- \x01\x00\x00\x00\x00\x00nene\x00 [NEGATIVE REPLY]
+        Failure: nene                                           -> \x00\x00\x00 [CONFIRM Message]
         -- MOZNOST PRO UZIVATELE ROZHODNOUT SE, CO DAL --
         ```
     * TCP:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
-                                                                            <- REPLY NOK IS nene\r\n [NEGATIVE REPLY]
+        /auth tom tom tom                                       -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                <- REPLY NOK IS nene\r\n [NEGATIVE REPLY]
         Failure: nene
         -- MOZNOST PRO UZIVATELE ROZHODNOUT SE, CO DAL --
         ```
@@ -325,24 +327,24 @@ Očekávaný výstup:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t udp -s 127.0.0.1 -p 4567
-        /auth tom tom tom                                                   -> \x02\x00\x00tom\x00tom\x00tom\x00 [AUTH Message]
-                                                                            <- \x00\x00\x00 [CONFIRM Message]
-                                                                            <- \x01\x00\x00\x01\x00\x00jojo\x00 [POSITIVE REPLY]
-        Success: jojo                                                       -> \x00\x00\x00 [CONFIRM Message]
-                                                                            <- \x02\x00\x01tom\x00tom\x00tom\x00 [(Unexpected) AUTH Message]
-                                                                            -> \x00\x00\x01 [CONFIRM Message]
-        ERR: Unexpected message received                                    -> \xfe\x00\x01tom\x00Unexpected message received\x00 [ERROR Message]
-                                                                            <- \x00\x00\x01 [CONFIRM Message]
+        /auth tom tom tom                                       -> \x02\x00\x00tom\x00tom\x00tom\x00 [AUTH Message]
+                                                                <- \x00\x00\x00 [CONFIRM Message]
+                                                                <- \x01\x00\x00\x01\x00\x00jojo\x00 [POSITIVE REPLY]
+        Success: jojo                                           -> \x00\x00\x00 [CONFIRM Message]
+                                                                <- \x02\x00\x01tom\x00tom\x00tom\x00 [(Unexpected) AUTH Message]
+                                                                -> \x00\x00\x01 [CONFIRM Message]
+        ERR: Unexpected message received                        -> \xfe\x00\x01tom\x00Unexpected message received\x00 [ERROR Message]
+                                                                <- \x00\x00\x01 [CONFIRM Message]
         ```
     * TCP:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
-                                                                            <- REPLY OK IS jojo\r\n [POSITIVE REPLY]
-        Success: jojo                                                       <- AUTH tom AS tom USING tom\r\n [AUTH Message]
-        ERR: Unexpected message received                                    -> ERR FROM tom IS Unexpected message received\r\n [ERROR Message]
-                                                                            -> BYE\r\n
+        /auth tom tom tom                                       -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                <- REPLY OK IS jojo\r\n [POSITIVE REPLY]
+        Success: jojo                                           <- AUTH tom AS tom USING tom\r\n [AUTH Message]
+        ERR: Unexpected message received                        -> ERR FROM tom IS Unexpected message received\r\n [ERROR Message]
+                                                                -> BYE\r\n
         ```
 
 ### Test reakce na přijetí vícera zpráv najednou (**TCP Specific**)
@@ -356,8 +358,8 @@ Očekávaný výstup:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
-                                                                            <- REPLY OK IS VSE JE OK\r\nMSG FROM tom IS ahoj svete\r\n [POSITIVE REPLY + MSG Message]
+        /auth tom tom tom                                       -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                <- REPLY OK IS VSE JE OK\r\nMSG FROM tom IS ahoj svete\r\n [POSITIVE REPLY + MSG Message]
         Success: VSE JE OK
         tom: ahoj svete
         ```
@@ -373,10 +375,10 @@ Očekávaný výstup:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
-                                                                            <- REPLY OK I
-                                                                            ...wait 2 secs...
-                                                                            S VSE JE OK\r\n
+        /auth tom tom tom                                       -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                <- REPLY OK I
+                                                                ...wait 2 secs...
+                                                                <- S VSE JE OK\r\n
         Success: VSE JE OK
         ```
 
@@ -391,8 +393,8 @@ Očekávaný výstup:
         ```
         ┌──(dandys㉿DandysComp)-[~/Dandys-Kingdom/IPK-Projects/1.Project]
         └─$ ./ipk24chat-client -t tcp -s 127.0.0.1 -p 4567
-        /auth tom tom tom                                                   -> AUTH tom AS tom USING tom\r\n [AUTH Message]
-                                                                            <- RePlY Ok iS VsE je OK\r\n [POSITIVE REPLY Message]
+        /auth tom tom tom                                       -> AUTH tom AS tom USING tom\r\n [AUTH Message]
+                                                                <- RePlY Ok iS VsE je OK\r\n [POSITIVE REPLY Message]
         Success: VsE je OK
         ```
 
