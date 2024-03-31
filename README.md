@@ -1,8 +1,8 @@
 [main-file-ref]: main.cpp
 [udp-file-ref]: UDPClass.cpp
 [tcp-file-ref]: TCPClass.cpp
-[abst-file-ref]: ClientClass.cpp
-[output-file-ref]: OutputClass.cpp
+[abst-file-ref]: ClientClass.h
+[output-file-ref]: OutputClass.h
 [mockudp-file-ref]: mockUDPserver.py
 [mocktcp-file-ref]: mockTCPserver.py
 
