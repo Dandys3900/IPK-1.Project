@@ -164,7 +164,7 @@ Testování probíhalo v rámci hostujícího notebooku v prostředí Windows Su
 
 **Oba výše uvedené testovací skripty byly v průběhu testování upravovány podle povahy a potřeb jednotlivých testů a zároveň pokud nebude v rámci jednotlivých testů uvedeno jinak, je za testovací prostředí implicitně považováno výše uvedené prostředí.**
 
-** Symbol `->` značí příchozí zprávu na server a symbol `<-` naopak značí odchozí zprávu z serveru ke klientovi**
+**Symbol `->` značí příchozí zprávu na server a symbol `<-` naopak značí odchozí zprávu z serveru ke klientovi**
 
 ### Test chybějícího povinného argumenty programu
 * Popis testu: Uživatel vynechá povinný argument spouštění programu *-t*, pro specifikaci typu komunikačního protokolu
