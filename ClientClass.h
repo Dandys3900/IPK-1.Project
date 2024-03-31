@@ -20,6 +20,7 @@ class ClientClass {
           stop_send       (false),
           stop_recv       (false),
           high_priority   (false),
+          load_input      (false),
           wait_for_reply  (false),
           end_program     (false),
           cur_state       (S_START)
@@ -55,9 +56,21 @@ class ClientClass {
         bool stop_program () {
             return this->end_program;
         }
+        // Returns value indicating whether next user input can be loaded
+        bool load_user_input () {
+            return this->load_input;
+        }
+        // Setter for attribute indicating whether next user input is allowed to be read
+        void set_load_user_input (bool value) {
+            this->load_input = value;
+        }
         // Getter for conditional variable
         std::condition_variable& get_cond_var () {
             return this->cond_var;
+        }
+        // Getter for conditional variable
+        std::condition_variable& get_input_cond_var () {
+            return this->input_cond_var;
         }
         // Splits given string line into given string vector while using delim as separator
         void split_to_vec (std::string line, std::vector<std::string>& words_vec, char delim) {
@@ -140,6 +153,7 @@ class ClientClass {
         bool stop_send;
         bool stop_recv;
         bool high_priority;
+        bool load_input;
 
         std::atomic<bool> wait_for_reply;
         std::atomic<bool> end_program;
@@ -147,6 +161,7 @@ class ClientClass {
 
         std::condition_variable cond_var;
         std::condition_variable send_cond_var;
+        std::condition_variable input_cond_var;
 };
 
 #endif // CLIENTCLASS_H

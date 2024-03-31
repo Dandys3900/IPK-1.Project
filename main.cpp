@@ -16,6 +16,8 @@ void handle_user_input () {
     // Standard input (stdin)
     fds[0].fd = 0;
     fds[0].events = POLLIN;
+    // Mutex for conditional variable
+    std::mutex load_mutex;
 
     // Process user input
     std::string user_line;
@@ -26,7 +28,6 @@ void handle_user_input () {
         if (result > 0) {
             if (fds[0].revents & (POLLIN | POLLHUP)) { // Input is available, read it
                 std::getline(std::cin, user_line);
-
                 // Skip empty line
                 if (user_line.empty() == true)
                     continue;
@@ -40,13 +41,23 @@ void handle_user_input () {
                         client->send_join(line_vec.at(1));
                     else if (line_vec.at(0) == std::string("/rename") && line_vec.size() == 2)
                         client->send_rename(line_vec.at(1));
-                    else if (line_vec.at(0) == std::string("/help") && line_vec.size() == 1)
-                        OutputClass::out_help_cmds();
-                    else if (std::cin.eof() == false) // Output error and continue
-                        OutputClass::out_err_intern("Unknown command or unsufficinet number of command params provided");
+                    else {
+                        if (line_vec.at(0) == std::string("/help") && line_vec.size() == 1)
+                            OutputClass::out_help_cmds();
+                        else if (std::cin.eof() == false) // Output error and continue
+                            OutputClass::out_err_intern("Unknown command or unsufficinet number of command params provided");
+                        continue;
+                    }
                 }
                 else if (std::cin.eof() == false) // Msg to send
                     client->send_msg(user_line);
+
+                // Wait for user input being processed by client
+                std::unique_lock<std::mutex> lock(load_mutex);
+                client->get_input_cond_var().wait(lock, [] {
+                    return client->load_user_input();
+                });
+                client->set_load_user_input(false);
             }
         }
     }

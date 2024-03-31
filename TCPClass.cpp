@@ -55,6 +55,9 @@ void TCPClass::session_end() {
     // Exit the program by notifying main function
     this->end_program = true;
     this->cond_var.notify_one();
+    // Ensure stopping of user input handling thread
+    this->load_input = true;
+    this->input_cond_var.notify_one();
 }
 /***********************************************************************************/
 void TCPClass::send_auth(std::string user, std::string display, std::string secret) {
@@ -180,7 +183,11 @@ void TCPClass::handle_send() {
     while (this->stop_send == false) {
         { // Mutex lock scope
             std::unique_lock<std::mutex> lock(this->editing_front_mutex);
-            if (this->messages_to_send.empty() == false && this->wait_for_reply == false) {
+            if (this->messages_to_send.empty() == true && this->wait_for_reply == false) {
+                this->load_input = true;
+                this->input_cond_var.notify_one();
+            }
+            else if (this->messages_to_send.empty() == false && this->wait_for_reply == false) {
                 // Stop sending if requested
                 if (this->stop_send == true)
                     break;
@@ -252,7 +259,6 @@ void TCPClass::handle_receive () {
             msg_shift += bytes_received;
             continue;
         }
-
         // Reuse it
         size_t end_symb_pos = 0;
         // When given buffer contains multiple messages, iterate thorugh them
@@ -325,7 +331,14 @@ void TCPClass::handle_receive () {
                     this->cur_state = S_END;
                     send_priority_bye();
                     break;
-                case S_START:
+                case S_START: // After initial connection immediate server msg, unexpected
+                    // Notify user
+                    OutputClass::out_err_intern("Unexpected message received");
+                    // Clear the queue
+                    this->high_priority = true;
+                    // Then send BYE and end
+                    send_bye();
+                    break;
                 case S_END: // Ignore everything
                     break;
                 default: // Not expected state, output error

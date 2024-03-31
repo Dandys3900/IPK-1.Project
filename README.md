@@ -3,8 +3,8 @@
 [tcp-file-ref]: TCPClass.cpp
 [abst-file-ref]: ClientClass.cpp
 [output-file-ref]: OutputClass.cpp
-[mockudp-file-ref]: testing/mockUDPserver.py
-[mocktcp-file-ref]: testing/mockTCPserver.py
+[mockudp-file-ref]: mockUDPserver.py
+[mocktcp-file-ref]: mockTCPserver.py
 
 # **Projektová dokumentace prvního projektu do předmětu IPK 2023/24**
 **Autor:** Tomáš Daniel \
@@ -156,8 +156,6 @@ V případě notebooku se jednalo o [Samsung Galaxy Book2 Pro 360](https://www.s
 5. **Síťová karta:**  Intel(R) Wi-Fi 6E AX211 160MHz
     * **Connection Name:** WiFi
     * **DHCP Enabled:**    Yes
-    * **DHCP Server:**     192.168.0.1
-    * **IP address(es):**  192.168.0.122
 
 #### Testovací prostředí
 Testování probíhalo v rámci hostujícího notebooku v prostředí Windows Subsystem for Linux (`WSL`), ve které byla spuštěna Linuxová distribuce **Kali Linux** (*Release:* 2023.4; *Codename:* kali-rolling). Pro simulování druhého účastníka komunikace, tedy serveru, posloužily dva Python skripty [mockTCPserver.py][mocktcp-file-ref] a [mockUDPserver.py][mockudp-file-ref].

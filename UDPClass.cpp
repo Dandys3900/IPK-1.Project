@@ -63,6 +63,9 @@ void UDPClass::session_end () {
     // Exit the program by notifying main function
     this->end_program = true;
     this->cond_var.notify_one();
+    // Ensure stopping of user input handling thread
+    this->load_input = true;
+    this->input_cond_var.notify_one();
 }
 /***********************************************************************************/
 void UDPClass::send_auth (std::string user, std::string display, std::string secret) {
@@ -279,6 +282,10 @@ void UDPClass::thread_event (THREAD_EVENT event, uint16_t confirm_to_id) {
                     OutputClass::out_err_intern("Confirmation to unexpected message received");
             }
         }
+        if (this->messages_to_send.empty()) {
+            this->load_input = true;
+            this->input_cond_var.notify_one();
+        }
     }
     // Notify waiting thread (if any)
     this->send_cond_var.notify_one();
@@ -353,7 +360,6 @@ void UDPClass::handle_receive () {
                         if (data.result == true) // Positive reply - switch to open
                             this->cur_state = S_OPEN;
                         // else: Negative reply -> stay in AUTH state and allow user to re-authenticate
-
                         // Reset waiting for reply flag
                         this->wait_for_reply = false;
                         this->send_cond_var.notify_one();

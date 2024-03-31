@@ -24,18 +24,26 @@ while(True):
     clientIP  = "Client IP Address:{}".format(address)
 
     print(clientMsg)
-    print(clientIP)
+
+    # Send confirm
+    # Send reply
+
 
     # Send only once
-    if (alreadySent is False) :
-        alreadySent = True
-        # Sending a reply to client
-        # Firstly send confimation msg
-        confirm_msg = "000"
-        bytesToSend   = str.encode(confirm_msg)
-        UDPServerSocket.sendto(bytesToSend, address)
+    alreadySent = True
+    # Sending a reply to client
+    # Firstly send confimation msg
 
-        # Now send reply msg to authenticate user
-        reply_msg = "101100" + "Hello from server"
-        bytesToSend   = str.encode(reply_msg)
-        UDPServerSocket.sendto(bytesToSend, address)
+    if message == b'\x00\x00\x00':
+        continue
+
+    confirm = b'\x00\x00\x00'
+    UDPServerSocket.sendto(confirm, address)
+
+    reply = b'\x01\x00\x00\x00\x00\x00yes\x00'
+    UDPServerSocket.sendto(reply, address)
+
+    # Now send reply msg to authenticate user
+    #reply_msg = "101100" + "Hello from server"
+    #bytesToSend   = str.encode(reply_msg)
+    #UDPServerSocket.sendto(bytesToSend, address)

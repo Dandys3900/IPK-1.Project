@@ -30,7 +30,7 @@ class OutputClass {
             help_text += "  -t to set type [tcp/udp]\n";
             help_text += "  -s for providing IPv4 address\n";
             help_text += "  -p for specifying port\n";
-            help_text += "  -d for UDP timeout\n";
+            help_text += "  -d for UDP timeout [ms]\n";
             help_text += "  -r for UDP retransmissions count";
             // Output to stdout
             cout << help_text << endl;
